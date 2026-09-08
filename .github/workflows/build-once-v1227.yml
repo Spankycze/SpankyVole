@@ -1,0 +1,676 @@
+name: One-shot Spankyho Optimizer V12.2.7
+
+on:
+  push:
+    branches: [spankyho-optimizer-v12-winui3]
+    paths:
+      - ".github/workflows/build-once-v1227.yml"
+
+jobs:
+  build:
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild source
+        shell: pwsh
+        run: |
+          $parts=Get-ChildItem buildsrc/chunk*.txt | Sort-Object Name
+          if($parts.Count -ne 9){ throw "Expected 9 source chunks" }
+          $b64=($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('source.zip',[Convert]::FromBase64String($b64))
+          Expand-Archive source.zip . -Force
+
+      - name: Replace fragile MainWindow XAML with minimal host
+        shell: pwsh
+        run: |
+          @'
+          <Window
+              x:Class="SpankyhoOptimizer.MainWindow"
+              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+          </Window>
+          '@ | Set-Content src/SpankyhoOptimizer/MainWindow.xaml -Encoding utf8 -NoNewline
+
+      - name: Add code-built WinUI shell
+        shell: pwsh
+        run: |
+          @'
+          using Microsoft.UI;
+          using Microsoft.UI.Xaml;
+          using Microsoft.UI.Xaml.Controls;
+          using Microsoft.UI.Xaml.Media;
+
+          namespace SpankyhoOptimizer;
+
+          public sealed partial class MainWindow
+          {
+              private Grid RootGrid = null!;
+              private Grid AppTitleBar = null!;
+              private NavigationView Nav = null!;
+              private TextBlock PageTitle = null!;
+              private TextBlock PageSubtitle = null!;
+              private StackPanel SubSelectorHost = null!;
+              private Grid TopActions = null!;
+              private StackPanel ContentStack = null!;
+              private Border ActionBar = null!;
+              private TextBlock DirtyText = null!;
+
+              private static SolidColorBrush Brush(byte r, byte g, byte b) =>
+                  new(ColorHelper.FromArgb(255, r, g, b));
+
+              private void BuildShell()
+              {
+                  RootGrid = new Grid { Background = Brush(15, 17, 21) };
+                  RootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(48) });
+                  RootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                  Content = RootGrid;
+
+                  AppTitleBar = new Grid
+                  {
+                      Background = Brush(18, 20, 25),
+                      Padding = new Thickness(16, 0, 140, 0)
+                  };
+                  AppTitleBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                  AppTitleBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                  AppTitleBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                  var logo = new Border
+                  {
+                      Width = 28,
+                      Height = 28,
+                      CornerRadius = new CornerRadius(8),
+                      Background = Brush(99, 102, 241),
+                      VerticalAlignment = VerticalAlignment.Center,
+                      Child = new TextBlock
+                      {
+                          Text = "S",
+                          Foreground = Brush(255,255,255),
+                          FontSize = 16,
+                          FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+                          HorizontalAlignment = HorizontalAlignment.Center,
+                          VerticalAlignment = VerticalAlignment.Center
+                      }
+                  };
+                  AppTitleBar.Children.Add(logo);
+
+                  var title = new StackPanel
+                  {
+                      Orientation = Orientation.Horizontal,
+                      Spacing = 8,
+                      Margin = new Thickness(10, 0, 0, 0),
+                      VerticalAlignment = VerticalAlignment.Center
+                  };
+                  title.Children.Add(new TextBlock
+                  {
+                      Text = "Spankyho Optimizer",
+                      FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                      FontSize = 14,
+                      Foreground = Brush(245,245,248)
+                  });
+                  title.Children.Add(new TextBlock
+                  {
+                      Text = "V12.2.7",
+                      Opacity = .62,
+                      FontSize = 12,
+                      Foreground = Brush(245,245,248),
+                      VerticalAlignment = VerticalAlignment.Center
+                  });
+                  Grid.SetColumn(title, 1);
+                  AppTitleBar.Children.Add(title);
+
+                  var admin = new Border
+                  {
+                      CornerRadius = new CornerRadius(8),
+                      Padding = new Thickness(10, 5, 10, 5),
+                      Background = Brush(34, 37, 44),
+                      VerticalAlignment = VerticalAlignment.Center,
+                      Child = new TextBlock
+                      {
+                          Text = "● Správce",
+                          FontSize = 11,
+                          Foreground = Brush(82, 201, 154)
+                      }
+                  };
+                  Grid.SetColumn(admin, 2);
+                  AppTitleBar.Children.Add(admin);
+                  RootGrid.Children.Add(AppTitleBar);
+
+                  Nav = new NavigationView
+                  {
+                      IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+                      IsSettingsVisible = false,
+                      PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
+                      OpenPaneLength = 258,
+                      CompactPaneLength = 58,
+                      Background = Brush(15,17,21)
+                  };
+                  Nav.SelectionChanged += Nav_SelectionChanged;
+
+                  AddNav("Přehled", "overview");
+                  AddNav("Systémové tweaky", "system");
+                  AddNav("Power Plan", "power");
+                  AddNav("GPU / Display", "gpu");
+                  AddNav("Paměť & Latence", "memory");
+                  AddNav("Úložiště / NVMe", "storage");
+                  AddNav("Internet / Síť", "network");
+                  AddNav("Prohlížeče", "browsers");
+                  AddNav("Systémové komponenty", "components");
+                  AddNav("UI / Explorer", "ui");
+                  AddNav("Windows Update", "update");
+                  AddNav("Soukromí & zabezpečení", "privacy");
+                  AddNav("Defender", "defender");
+                  AddNav("Debloater", "debloat");
+                  AddNav("Aplikace", "apps");
+                  AddNav("BIOS / SCEWIN", "bios");
+                  AddNav("Fixer", "fixer");
+                  AddNav("Záloha / Obnova", "restore");
+                  AddNav("Monitor / Log", "logs");
+                  AddNav("Nastavení", "settings");
+
+                  var scroll = new ScrollViewer
+                  {
+                      VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                      HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+                  };
+
+                  var pageHost = new Grid
+                  {
+                      Padding = new Thickness(28, 22, 30, 24),
+                      MaxWidth = 1240,
+                      HorizontalAlignment = HorizontalAlignment.Stretch
+                  };
+                  pageHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                  pageHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                  pageHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                  pageHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                  var head = new Grid { Margin = new Thickness(0,0,0,18) };
+                  head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                  head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                  var leftHead = new StackPanel();
+                  PageTitle = new TextBlock
+                  {
+                      Text = "Přehled",
+                      FontSize = 30,
+                      FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                      Foreground = Brush(245,245,248)
+                  };
+                  PageSubtitle = new TextBlock
+                  {
+                      Text = "Stav systému a rychlé profily",
+                      FontSize = 14,
+                      Opacity = .70,
+                      Margin = new Thickness(0,5,0,0),
+                      TextWrapping = TextWrapping.Wrap,
+                      Foreground = Brush(245,245,248)
+                  };
+                  leftHead.Children.Add(PageTitle);
+                  leftHead.Children.Add(PageSubtitle);
+                  head.Children.Add(leftHead);
+
+                  SubSelectorHost = new StackPanel
+                  {
+                      Orientation = Orientation.Horizontal,
+                      Spacing = 8,
+                      VerticalAlignment = VerticalAlignment.Bottom,
+                      Visibility = Visibility.Collapsed
+                  };
+                  Grid.SetColumn(SubSelectorHost,1);
+                  head.Children.Add(SubSelectorHost);
+                  pageHost.Children.Add(head);
+
+                  TopActions = new Grid { Margin = new Thickness(0,0,0,16) };
+                  Grid.SetRow(TopActions,1);
+                  pageHost.Children.Add(TopActions);
+
+                  ContentStack = new StackPanel();
+                  Grid.SetRow(ContentStack,2);
+                  pageHost.Children.Add(ContentStack);
+
+                  ActionBar = new Border
+                  {
+                      Visibility = Visibility.Collapsed,
+                      Margin = new Thickness(0,14,0,0),
+                      Padding = new Thickness(12),
+                      CornerRadius = new CornerRadius(12),
+                      Background = Brush(28,30,36),
+                      BorderBrush = new SolidColorBrush(ColorHelper.FromArgb(40,255,255,255)),
+                      BorderThickness = new Thickness(1)
+                  };
+                  var actionGrid = new Grid();
+                  actionGrid.ColumnDefinitions.Add(new ColumnDefinition());
+                  actionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                  DirtyText = new TextBlock
+                  {
+                      Text = "Nevyřízené změny",
+                      VerticalAlignment = VerticalAlignment.Center,
+                      FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                      Margin = new Thickness(4,0,0,0),
+                      Foreground = Brush(245,245,248)
+                  };
+                  actionGrid.Children.Add(DirtyText);
+
+                  var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                  var discard = new Button
+                  {
+                      Content = "Zrušit změny",
+                      CornerRadius = new CornerRadius(9),
+                      Padding = new Thickness(14,8,14,8)
+                  };
+                  discard.Click += Discard_Click;
+                  var apply = new Button
+                  {
+                      Content = "Použít změny",
+                      CornerRadius = new CornerRadius(9),
+                      Padding = new Thickness(14,8,14,8),
+                      Background = Brush(99,102,241),
+                      Foreground = Brush(255,255,255)
+                  };
+                  apply.Click += Apply_Click;
+                  actions.Children.Add(discard);
+                  actions.Children.Add(apply);
+                  Grid.SetColumn(actions,1);
+                  actionGrid.Children.Add(actions);
+                  ActionBar.Child = actionGrid;
+                  Grid.SetRow(ActionBar,3);
+                  pageHost.Children.Add(ActionBar);
+
+                  scroll.Content = pageHost;
+                  Nav.Content = scroll;
+                  Grid.SetRow(Nav,1);
+                  RootGrid.Children.Add(Nav);
+              }
+
+              private void AddNav(string title, string tag)
+              {
+                  Nav.MenuItems.Add(new NavigationViewItem { Content = title, Tag = tag });
+              }
+          }
+          '@ | Set-Content src/SpankyhoOptimizer/MainWindow.Shell.cs -Encoding utf8 -NoNewline
+
+      - name: Patch constructor and project
+        shell: pwsh
+        run: |
+          $mc='src/SpankyhoOptimizer/MainWindow.xaml.cs'
+          $c=Get-Content $mc -Raw
+          $c=$c.Replace("        InitializeComponent();`r`n        ExtendsContentIntoTitleBar = true;","        InitializeComponent();`r`n        BuildShell();`r`n        ExtendsContentIntoTitleBar = true;")
+          $c=$c.Replace('        SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };','        try { SystemBackdrop = new MicaBackdrop(); } catch (Exception ex) { LogService.Error("Backdrop setup failed", ex); }')
+          $c=$c.Replace('        ConfigureWindow();','        try { ConfigureWindow(); } catch (Exception ex) { LogService.Error("Window configuration failed", ex); }')
+          Set-Content $mc $c -Encoding utf8 -NoNewline
+
+          $p='src/SpankyhoOptimizer/SpankyhoOptimizer.csproj'
+          $s=Get-Content $p -Raw
+          $s=$s.Replace('Version="2.4.0"','Version="1.8.260804001"')
+          $s=$s.Replace('<WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>','<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>')
+          $s=$s.Replace('<PublishReadyToRun>true</PublishReadyToRun>','<PublishReadyToRun>false</PublishReadyToRun>')
+          $s=$s.Replace('<Version>12.2.0</Version>','<Version>12.2.7</Version>')
+          Set-Content $p $s -Encoding utf8 -NoNewline
+
+      - name: Validate XAML files before build
+        shell: pwsh
+        run: |
+          [xml](Get-Content src/SpankyhoOptimizer/MainWindow.xaml -Raw) | Out-Null
+          [xml](Get-Content src/SpankyhoOptimizer/App.xaml -Raw) | Out-Null
+          Write-Host "XAML XML validation passed."
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build self-contained WinUI app
+        shell: pwsh
+        run: |
+          dotnet restore src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -p:Platform=x64
+          dotnet publish src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishReadyToRun=false -o artifacts/app
+          if(!(Test-Path artifacts/app/SpankyhoOptimizer.exe)){ throw "Main app missing" }
+
+      - name: Mandatory WinUI startup test
+        shell: pwsh
+        run: |
+          $exe=(Resolve-Path artifacts/app/SpankyhoOptimizer.exe).Path
+          $p=Start-Process $exe -PassThru -WorkingDirectory (Split-Path $exe)
+          Start-Sleep -Seconds 10
+          $p.Refresh()
+          if($p.HasExited){
+            $logs=@(
+              (Join-Path $env:ProgramData 'SpankyhoOptimizer\optimizer.log'),
+              (Join-Path $env:ProgramData 'SpankyhoOptimizerV12\optimizer.log')
+            )
+            foreach($log in $logs){ if(Test-Path $log){ Write-Host "===== $log ====="; Get-Content $log -Tail 160 } }
+            throw "Main app exited during startup smoke test. ExitCode=$($p.ExitCode)"
+          }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "WinUI startup test PASSED (10 seconds)."
+
+      - name: Pack payload
+        shell: pwsh
+        run: |
+          Compress-Archive -Path artifacts/app/* -DestinationPath artifacts/payload.zip -CompressionLevel Optimal -Force
+
+      - name: Create clean readable installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force installer/Resources | Out-Null
+          Copy-Item artifacts/payload.zip installer/Resources/payload.zip
+
+          @'
+          <Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+            <PropertyGroup>
+              <OutputType>WinExe</OutputType>
+              <TargetFramework>net48</TargetFramework>
+              <UseWPF>true</UseWPF>
+              <PlatformTarget>x64</PlatformTarget>
+              <Prefer32Bit>false</Prefer32Bit>
+              <AssemblyName>Spankyho_Optimizer_V12_2_7_Setup</AssemblyName>
+              <RootNamespace>SpankyhoInstaller</RootNamespace>
+              <ApplicationManifest>app.manifest</ApplicationManifest>
+              <DebugType>none</DebugType>
+              <DebugSymbols>false</DebugSymbols>
+            </PropertyGroup>
+            <ItemGroup>
+              <EmbeddedResource Include="Resources\payload.zip" LogicalName="payload.zip" />
+              <Reference Include="System.IO.Compression" />
+              <Reference Include="System.IO.Compression.FileSystem" />
+              <Reference Include="Microsoft.CSharp" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content installer/SpankyhoInstaller.csproj -Encoding utf8 -NoNewline
+
+          @'
+          <?xml version="1.0" encoding="utf-8"?>
+          <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+            <assemblyIdentity version="12.2.7.0" name="SpankyhoOptimizer.Setup"/>
+            <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+              <security><requestedPrivileges><requestedExecutionLevel level="requireAdministrator" uiAccess="false"/></requestedPrivileges></security>
+            </trustInfo>
+          </assembly>
+          '@ | Set-Content installer/app.manifest -Encoding utf8 -NoNewline
+
+          @'
+          using Microsoft.Win32;
+          using System;
+          using System.Diagnostics;
+          using System.IO;
+          using System.IO.Compression;
+          using System.Linq;
+          using System.Reflection;
+          using System.Threading.Tasks;
+          using System.Windows;
+          using System.Windows.Controls;
+          using System.Windows.Media;
+
+          namespace SpankyhoInstaller
+          {
+              internal static class Program
+              {
+                  [STAThread]
+                  static int Main(string[] args)
+                  {
+                      if (args.Contains("--smoketest"))
+                      {
+                          using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip"))
+                              return s == null ? 3 : 0;
+                      }
+                      if (args.Contains("--uninstall")) return Uninstall();
+                      var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+                      app.Run(new InstallerWindow());
+                      return 0;
+                  }
+
+                  static int Uninstall()
+                  {
+                      try
+                      {
+                          var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Spankyho Optimizer");
+                          try { foreach (var p in Process.GetProcessesByName("SpankyhoOptimizer")) p.Kill(); } catch { }
+                          try { File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Spankyho Optimizer.lnk")); } catch { }
+                          try { File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), "Spankyho Optimizer.lnk")); } catch { }
+                          try { Registry.LocalMachine.DeleteSubKeyTree(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SpankyhoOptimizer", false); } catch { }
+                          var cmd = Path.Combine(Path.GetTempPath(), "spankyho_remove.cmd");
+                          File.WriteAllText(cmd, "@echo off\r\ntimeout /t 2 /nobreak >nul\r\nrmdir /s /q \"" + dir + "\"\r\ndel /f /q \"%~f0\"\r\n");
+                          Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + cmd + "\"") { CreateNoWindow = true, UseShellExecute = false });
+                          return 0;
+                      }
+                      catch { return 1; }
+                  }
+              }
+
+              internal sealed class InstallerWindow : Window
+              {
+                  readonly SolidColorBrush Accent = new SolidColorBrush(Color.FromRgb(99, 102, 241));
+                  readonly SolidColorBrush MainText = new SolidColorBrush(Color.FromRgb(20, 22, 28));
+                  readonly SolidColorBrush SubText = new SolidColorBrush(Color.FromRgb(72, 77, 89));
+                  readonly ProgressBar Progress = new ProgressBar { Height = 10, Minimum = 0, Maximum = 100, Margin = new Thickness(0, 10, 0, 6) };
+                  readonly TextBlock Status = new TextBlock { Text = "Připraveno k instalaci", FontSize = 15, FontWeight = FontWeights.SemiBold };
+                  readonly TextBlock Percent = new TextBlock { Text = "0 %", FontSize = 14, FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Right };
+                  readonly CheckBox Desktop = new CheckBox { Content = "Vytvořit zástupce na ploše", IsChecked = true, FontSize = 15, Margin = new Thickness(0, 6, 0, 10) };
+                  readonly CheckBox Launch = new CheckBox { Content = "Po instalaci spustit aplikaci", IsChecked = true, FontSize = 15 };
+                  readonly Button Install = new Button { Content = "Nainstalovat", MinWidth = 165, Height = 48, FontSize = 15, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, BorderThickness = new Thickness(0) };
+                  readonly Button Cancel = new Button { Content = "Zrušit", MinWidth = 110, Height = 48, FontSize = 15, Margin = new Thickness(10, 0, 0, 0) };
+                  readonly string LogDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SpankyhoOptimizer");
+                  string LogPath { get { return Path.Combine(LogDir, "setup.log"); } }
+
+                  public InstallerWindow()
+                  {
+                      Title = "Spankyho Optimizer V12.2.7 Setup";
+                      Width = 780;
+                      Height = 610;
+                      MinWidth = 700;
+                      MinHeight = 550;
+                      WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                      Background = new SolidColorBrush(Color.FromRgb(246, 247, 250));
+                      Foreground = MainText;
+                      FontFamily = new FontFamily("Segoe UI");
+                      Install.Background = Accent;
+                      Cancel.Background = Brushes.White;
+                      Cancel.Foreground = MainText;
+                      Cancel.BorderBrush = new SolidColorBrush(Color.FromRgb(205, 209, 218));
+                      Progress.Foreground = Accent;
+                      Content = BuildUi();
+                      Install.Click += async delegate { await InstallAsync(); };
+                      Cancel.Click += delegate { Close(); };
+                  }
+
+                  UIElement BuildUi()
+                  {
+                      var root = new Grid { Margin = new Thickness(40, 32, 40, 30) };
+                      root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                      root.RowDefinitions.Add(new RowDefinition());
+                      root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                      var head = new Grid { Margin = new Thickness(0, 0, 0, 26) };
+                      head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                      head.ColumnDefinitions.Add(new ColumnDefinition());
+                      var logo = new Border { Width = 58, Height = 58, CornerRadius = new CornerRadius(15), Background = Accent };
+                      logo.Child = new TextBlock { Text = "S", Foreground = Brushes.White, FontWeight = FontWeights.Bold, FontSize = 31, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+                      head.Children.Add(logo);
+                      var title = new StackPanel { Margin = new Thickness(17, 1, 0, 0) };
+                      Grid.SetColumn(title, 1);
+                      title.Children.Add(new TextBlock { Text = "Instalace Spankyho Optimizer", FontSize = 30, FontWeight = FontWeights.SemiBold, Foreground = MainText });
+                      title.Children.Add(new TextBlock { Text = "Čistá instalace pro Windows 11", FontSize = 15, Foreground = SubText, Margin = new Thickness(0, 5, 0, 0) });
+                      head.Children.Add(title);
+                      root.Children.Add(head);
+
+                      var card = new Border { Background = Brushes.White, CornerRadius = new CornerRadius(18), BorderBrush = new SolidColorBrush(Color.FromRgb(220, 223, 230)), BorderThickness = new Thickness(1), Padding = new Thickness(26), Margin = new Thickness(0, 0, 0, 22) };
+                      Grid.SetRow(card, 1);
+                      var body = new StackPanel();
+                      body.Children.Add(new TextBlock { Text = "Umístění instalace", FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = MainText, Margin = new Thickness(0, 0, 0, 9) });
+                      var pathBox = new Border { Background = new SolidColorBrush(Color.FromRgb(247, 248, 250)), CornerRadius = new CornerRadius(10), BorderBrush = new SolidColorBrush(Color.FromRgb(219, 222, 229)), BorderThickness = new Thickness(1), Padding = new Thickness(15, 12, 15, 12), Margin = new Thickness(0, 0, 0, 22) };
+                      pathBox.Child = new TextBlock { Text = @"C:\Program Files\Spankyho Optimizer", FontSize = 14, Foreground = MainText };
+                      body.Children.Add(pathBox);
+                      body.Children.Add(new TextBlock { Text = "Možnosti", FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = MainText, Margin = new Thickness(0, 0, 0, 8) });
+                      body.Children.Add(Desktop);
+                      body.Children.Add(Launch);
+                      body.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(232, 234, 239)), Margin = new Thickness(0, 24, 0, 20) });
+                      body.Children.Add(new TextBlock { Text = "Stav instalace", FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = MainText, Margin = new Thickness(0, 0, 0, 9) });
+                      var statusGrid = new Grid();
+                      statusGrid.ColumnDefinitions.Add(new ColumnDefinition());
+                      statusGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                      statusGrid.Children.Add(Status);
+                      Grid.SetColumn(Percent, 1);
+                      statusGrid.Children.Add(Percent);
+                      body.Children.Add(statusGrid);
+                      body.Children.Add(Progress);
+                      body.Children.Add(new TextBlock { Text = "Součástí instalace je .NET 10 i Windows App SDK. Po instalaci se nic dalšího nestahuje.", FontSize = 13, Foreground = SubText, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 15, 0, 0) });
+                      card.Child = body;
+                      root.Children.Add(card);
+
+                      var foot = new Grid();
+                      foot.ColumnDefinitions.Add(new ColumnDefinition());
+                      foot.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                      Grid.SetRow(foot, 2);
+                      foot.Children.Add(new TextBlock { Text = ".NET 10  •  WinUI 3  •  x64", FontSize = 13, Foreground = SubText, VerticalAlignment = VerticalAlignment.Center });
+                      var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+                      Grid.SetColumn(buttons, 1);
+                      buttons.Children.Add(Install);
+                      buttons.Children.Add(Cancel);
+                      foot.Children.Add(buttons);
+                      root.Children.Add(foot);
+                      return root;
+                  }
+
+                  async Task InstallAsync()
+                  {
+                      Install.IsEnabled = false;
+                      Cancel.IsEnabled = false;
+                      try
+                      {
+                          Directory.CreateDirectory(LogDir);
+                          SetProgress(8, "Příprava instalačních souborů");
+                          await Task.Run((Action)InstallPayload);
+                          SetProgress(84, "Vytváření zástupců");
+                          CreateShortcutsAndUninstall();
+                          SetProgress(100, "Instalace dokončena");
+
+                          if (Launch.IsChecked == true)
+                          {
+                              var exe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Spankyho Optimizer", "SpankyhoOptimizer.exe");
+                              Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(exe) });
+                          }
+                          MessageBox.Show("Spankyho Optimizer byl úspěšně nainstalován.", "Hotovo", MessageBoxButton.OK, MessageBoxImage.Information);
+                          Close();
+                      }
+                      catch (Exception ex)
+                      {
+                          Log("FATAL " + ex);
+                          MessageBox.Show(ex.Message + "\n\nLog: " + LogPath, "Instalace selhala", MessageBoxButton.OK, MessageBoxImage.Error);
+                          Install.IsEnabled = true;
+                          Cancel.IsEnabled = true;
+                      }
+                  }
+
+                  void SetProgress(double value, string text)
+                  {
+                      Dispatcher.Invoke(delegate
+                      {
+                          Progress.Value = value;
+                          Percent.Text = ((int)value) + " %";
+                          Status.Text = text;
+                      });
+                  }
+
+                  void InstallPayload()
+                  {
+                      var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Spankyho Optimizer");
+                      try { foreach (var p in Process.GetProcessesByName("SpankyhoOptimizer")) p.Kill(); } catch { }
+                      Directory.CreateDirectory(dir);
+                      foreach (var f in Directory.GetFiles(dir)) { try { File.Delete(f); } catch { } }
+                      foreach (var d in Directory.GetDirectories(dir)) { try { Directory.Delete(d, true); } catch { } }
+
+                      using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip"))
+                      {
+                          if (stream == null) throw new InvalidOperationException("Chybí instalační data.");
+                          using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+                          {
+                              int done = 0;
+                              int total = Math.Max(1, zip.Entries.Count);
+                              foreach (var entry in zip.Entries)
+                              {
+                                  var baseDir = Path.GetFullPath(dir) + Path.DirectorySeparatorChar;
+                                  var dst = Path.GetFullPath(Path.Combine(dir, entry.FullName));
+                                  if (!dst.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Neplatná cesta v archivu.");
+                                  if (string.IsNullOrEmpty(entry.Name)) Directory.CreateDirectory(dst);
+                                  else
+                                  {
+                                      Directory.CreateDirectory(Path.GetDirectoryName(dst));
+                                      using (var input = entry.Open())
+                                      using (var output = new FileStream(dst, FileMode.Create, FileAccess.Write, FileShare.None))
+                                          input.CopyTo(output);
+                                  }
+                                  done++;
+                                  if (done % 5 == 0) SetProgress(8 + 72.0 * done / total, "Kopírování souborů");
+                              }
+                          }
+                      }
+                      File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(dir, "SpankyhoOptimizer.Uninstall.exe"), true);
+                  }
+
+                  void CreateShortcutsAndUninstall()
+                  {
+                      var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Spankyho Optimizer");
+                      var exe = Path.Combine(dir, "SpankyhoOptimizer.exe");
+                      if (Desktop.IsChecked == true) CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Spankyho Optimizer.lnk"), exe, dir);
+                      CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), "Spankyho Optimizer.lnk"), exe, dir);
+                      using (var key = Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SpankyhoOptimizer"))
+                      {
+                          key.SetValue("DisplayName", "Spankyho Optimizer");
+                          key.SetValue("DisplayVersion", "12.2.7");
+                          key.SetValue("Publisher", "Spankyho");
+                          key.SetValue("InstallLocation", dir);
+                          key.SetValue("DisplayIcon", exe);
+                          key.SetValue("UninstallString", "\"" + Path.Combine(dir, "SpankyhoOptimizer.Uninstall.exe") + "\" --uninstall");
+                          key.SetValue("NoModify", 1, RegistryValueKind.DWord);
+                          key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
+                      }
+                  }
+
+                  void CreateShortcut(string path, string target, string work)
+                  {
+                      try
+                      {
+                          dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
+                          dynamic shortcut = shell.CreateShortcut(path);
+                          shortcut.TargetPath = target;
+                          shortcut.WorkingDirectory = work;
+                          shortcut.IconLocation = target + ",0";
+                          shortcut.Save();
+                      }
+                      catch (Exception ex) { Log("Shortcut: " + ex.Message); }
+                  }
+
+                  void Log(string text)
+                  {
+                      try
+                      {
+                          Directory.CreateDirectory(LogDir);
+                          File.AppendAllText(LogPath, "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] " + text + Environment.NewLine);
+                      }
+                      catch { }
+                  }
+              }
+          }
+          '@ | Set-Content installer/Program.cs -Encoding utf8 -NoNewline
+
+      - name: Build and smoke-test installer
+        shell: pwsh
+        run: |
+          dotnet restore installer/SpankyhoInstaller.csproj
+          dotnet build installer/SpankyhoInstaller.csproj -c Release -p:Platform=x64
+          $exe=(Resolve-Path installer/bin/x64/Release/net48/Spankyho_Optimizer_V12_2_7_Setup.exe).Path
+          & $exe --smoketest
+          if($LASTEXITCODE -ne 0){ throw "Installer smoke test failed: $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force artifacts/final | Out-Null
+          Copy-Item $exe artifacts/final/Spankyho_Optimizer_V12_2_7_Setup.exe
+          Get-FileHash artifacts/final/Spankyho_Optimizer_V12_2_7_Setup.exe -Algorithm SHA256 | Format-List | Out-File artifacts/final/SHA256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Spankyho_Optimizer_V12_2_7
+          path: artifacts/final/*
+          if-no-files-found: error
+          retention-days: 30
