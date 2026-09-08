@@ -1,0 +1,31 @@
+name: Build HClimate APK
+on:
+  push:
+    branches: [ hclimate-build ]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack source
+        run: unzip -o HClimate_SourceBuild_v0_4_0.zip -d .
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: yes | sdkmanager --licenses >/dev/null || true; sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Build debug APK
+        run: gradle --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HClimate_Home_v0_4_0
+          path: app/build/outputs/apk/debug/app-debug.apk
