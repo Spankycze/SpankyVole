@@ -1,4 +1,4 @@
-name: Build Spankyho Optimizer V12.2.2 Compact WinUI
+name: Build Spankyho Optimizer V12.2.3 Compact
 
 on:
   push:
@@ -23,200 +23,22 @@ jobs:
           [IO.File]::WriteAllBytes('source.zip',[Convert]::FromBase64String($b64))
           Expand-Archive source.zip . -Force
 
-      - name: Normalize WinUI projects
+      - name: Normalize main WinUI app
         shell: pwsh
         run: |
-          Get-ChildItem src -Recurse -Filter *.csproj | ForEach-Object {
-            $s = Get-Content $_.FullName -Raw
-            $s = $s.Replace('Version="2.4.0"','Version="1.8.260804001"')
-            $s = $s.Replace('<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>','<WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>')
-            $s = $s.Replace('<PublishReadyToRun>true</PublishReadyToRun>','<PublishReadyToRun>false</PublishReadyToRun>')
-            Set-Content $_.FullName $s -NoNewline
+          $p='src/SpankyhoOptimizer/SpankyhoOptimizer.csproj'
+          $s=Get-Content $p -Raw
+          $s=$s.Replace('Version="2.4.0"','Version="1.8.260804001"')
+          $s=$s.Replace('<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>','<WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>')
+          $s=$s.Replace('<PublishReadyToRun>true</PublishReadyToRun>','<PublishReadyToRun>false</PublishReadyToRun>')
+          Set-Content $p $s -NoNewline
+          Get-ChildItem src/SpankyhoOptimizer -Recurse -Include *.xaml,*.cs | ForEach-Object {
+            $x=Get-Content $_.FullName -Raw
+            $x=$x.Replace('Windows App SDK 2.4','Windows App SDK 1.8.11')
+            $x=$x.Replace(' FontFamily="Segoe UI Variable Text"','')
+            $x=$x.Replace('SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };','SystemBackdrop = new MicaBackdrop();')
+            Set-Content $_.FullName $x -NoNewline
           }
-          Get-ChildItem src -Recurse -Include *.xaml,*.cs | ForEach-Object {
-            $s = Get-Content $_.FullName -Raw
-            $s = $s.Replace('Windows App SDK 2.4','Windows App SDK 1.8.11')
-            $s = $s.Replace(' FontFamily="Segoe UI Variable Text"','')
-            $s = $s.Replace('SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };','SystemBackdrop = new MicaBackdrop();')
-            $s = $s.Replace('SystemBackdrop=new MicaBackdrop{Kind=MicaKind.BaseAlt};','SystemBackdrop=new MicaBackdrop();')
-            $s = $s.Replace('var id=Win32Interop.GetWindowIdFromWindow','var id=Microsoft.UI.Win32Interop.GetWindowIdFromWindow')
-            Set-Content $_.FullName $s -NoNewline
-          }
-
-      - name: Replace bootstrap with compact reliable launcher
-        shell: pwsh
-        run: |
-          @'
-          using System.Diagnostics;
-          using System.IO.Compression;
-          using System.Net.Http;
-          using System.Reflection;
-          using System.Runtime.InteropServices;
-
-          internal static class Program
-          {
-              [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-              private static extern int MessageBoxW(nint hWnd, string text, string caption, uint type);
-
-              private static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SpankyhoOptimizer");
-              private static readonly string LogPath = Path.Combine(Root, "setup-bootstrap.log");
-              private const string DotNetUrl = "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.10/dotnet-runtime-10.0.10-win-x64.exe";
-              private const string WinAppUrl = "https://aka.ms/windowsappsdk/1.8/1.8.260804001/windowsappruntimeinstall-x64.exe";
-
-              [STAThread]
-              private static int Main(string[] args)
-              {
-                  try
-                  {
-                      Directory.CreateDirectory(Root);
-                      bool extractOnly = args.Length > 0 && args[0].Equals("--extract-only", StringComparison.OrdinalIgnoreCase);
-                      Log("Bootstrap start; extractOnly=" + extractOnly);
-
-                      if (!extractOnly)
-                          EnsurePrerequisites();
-
-                      var setupDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SpankyhoOptimizer", "Installer", "12.2.2");
-                      try { if (Directory.Exists(setupDir)) Directory.Delete(setupDir, true); } catch { }
-                      Directory.CreateDirectory(setupDir);
-
-                      using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("setup.zip") ?? throw new InvalidOperationException("setup.zip resource missing"))
-                      using (var z = new ZipArchive(s, ZipArchiveMode.Read))
-                          z.ExtractToDirectory(setupDir, true);
-
-                      var setupExe = Path.Combine(setupDir, "SpankyhoOptimizer.Setup.exe");
-                      if (!File.Exists(setupExe)) throw new FileNotFoundException("Setup executable missing", setupExe);
-                      if (extractOnly) return 0;
-
-                      Log("Launching WinUI setup: " + setupExe);
-                      var p = Process.Start(new ProcessStartInfo(setupExe)
-                      {
-                          UseShellExecute = true,
-                          WorkingDirectory = setupDir,
-                          Verb = "runas"
-                      }) ?? throw new InvalidOperationException("Setup process could not be started");
-
-                      // Keep extracted WinUI files in a stable folder. The old temp bootstrap deleted them too early after ShellExecute/UAC.
-                      Log("Setup launched, pid=" + p.Id);
-                      return 0;
-                  }
-                  catch (Exception ex)
-                  {
-                      try { Log("FATAL: " + ex); } catch { }
-                      MessageBoxW(0, "Instalátor se nepodařilo spustit.\n\n" + ex.Message + "\n\nPodrobnosti: " + LogPath, "Spankyho Optimizer Setup", 0x10);
-                      return 1;
-                  }
-              }
-
-              private static void EnsurePrerequisites()
-              {
-                  var prereq = Path.Combine(Root, "Prerequisites");
-                  Directory.CreateDirectory(prereq);
-
-                  if (!HasDotNet10())
-                  {
-                      var file = Path.Combine(prereq, "dotnet-runtime-10.exe");
-                      Log(".NET 10 missing; downloading official Microsoft runtime");
-                      Download(DotNetUrl, file);
-                      RunInstaller(file, "/install /quiet /norestart", 0, 3010);
-                  }
-                  else Log(".NET 10 runtime present");
-
-                  var marker = Path.Combine(prereq, "windows-app-runtime-1.8.11.ok");
-                  if (!File.Exists(marker))
-                  {
-                      var file = Path.Combine(prereq, "windowsappruntime-1.8.11.exe");
-                      Log("Ensuring Windows App Runtime 1.8.11 from Microsoft");
-                      Download(WinAppUrl, file);
-                      RunInstaller(file, "--quiet", 0, 3010);
-                      File.WriteAllText(marker, DateTime.UtcNow.ToString("O"));
-                  }
-                  else Log("Windows App Runtime marker present");
-              }
-
-              private static bool HasDotNet10()
-              {
-                  try
-                  {
-                      var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "shared", "Microsoft.NETCore.App");
-                      return Directory.Exists(dir) && Directory.EnumerateDirectories(dir).Select(Path.GetFileName).Any(v => v is not null && v.StartsWith("10.", StringComparison.Ordinal));
-                  }
-                  catch { return false; }
-              }
-
-              private static void Download(string url, string target)
-              {
-                  try { if (File.Exists(target)) File.Delete(target); } catch { }
-                  using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-                  using var response = http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
-                  response.EnsureSuccessStatusCode();
-                  using var input = response.Content.ReadAsStream();
-                  using var output = File.Create(target);
-                  input.CopyTo(output);
-                  Log("Downloaded " + Path.GetFileName(target) + " bytes=" + output.Length);
-              }
-
-              private static void RunInstaller(string file, string arguments, params int[] okCodes)
-              {
-                  var p = Process.Start(new ProcessStartInfo(file)
-                  {
-                      UseShellExecute = false,
-                      CreateNoWindow = true,
-                      WorkingDirectory = Path.GetDirectoryName(file)!,
-                      Arguments = arguments
-                  }) ?? throw new InvalidOperationException("Could not start prerequisite installer");
-                  p.WaitForExit();
-                  int code = p.ExitCode;
-                  p.Dispose();
-                  if (!okCodes.Contains(code)) throw new InvalidOperationException(Path.GetFileName(file) + " failed with exit code " + code);
-                  try { File.Delete(file); } catch { }
-              }
-
-              private static void Log(string text) => File.AppendAllText(LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {text}{Environment.NewLine}");
-          }
-          '@ | Set-Content src/SpankyhoOptimizer.Bootstrap/Program.cs -NoNewline
-
-          @'
-          <?xml version="1.0" encoding="utf-8"?>
-          <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-            <assemblyIdentity version="12.2.2.0" name="SpankyhoOptimizer.Bootstrap"/>
-            <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-              <security><requestedPrivileges><requestedExecutionLevel level="requireAdministrator" uiAccess="false" /></requestedPrivileges></security>
-            </trustInfo>
-          </assembly>
-          '@ | Set-Content src/SpankyhoOptimizer.Bootstrap/app.manifest -NoNewline
-
-          @'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup>
-              <OutputType>WinExe</OutputType>
-              <TargetFramework>net10.0-windows</TargetFramework>
-              <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-              <PublishAot>true</PublishAot>
-              <SelfContained>true</SelfContained>
-              <InvariantGlobalization>true</InvariantGlobalization>
-              <AssemblyName>Spankyho_Optimizer_V12_2_2_Compact_Setup</AssemblyName>
-              <ApplicationIcon>App.ico</ApplicationIcon>
-              <ApplicationManifest>app.manifest</ApplicationManifest>
-              <DebugType>none</DebugType>
-              <DebugSymbols>false</DebugSymbols>
-              <StripSymbols>true</StripSymbols>
-            </PropertyGroup>
-            <ItemGroup>
-              <EmbeddedResource Include="Resources\setup.zip" LogicalName="setup.zip" />
-            </ItemGroup>
-          </Project>
-          '@ | Set-Content src/SpankyhoOptimizer.Bootstrap/SpankyhoOptimizer.Bootstrap.csproj -NoNewline
-
-      - name: Generate icon
-        shell: pwsh
-        run: |
-          Add-Type -AssemblyName System.Drawing
-          $bmp = [System.Drawing.Bitmap]::new(256,256); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias; $g.Clear([System.Drawing.Color]::Transparent)
-          $purple=[System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255,91,91,214)); $g.FillEllipse($purple,8,8,240,240)
-          $font=[System.Drawing.Font]::new('Segoe UI',132,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel); $white=[System.Drawing.SolidBrush]::new([System.Drawing.Color]::White); $sf=[System.Drawing.StringFormat]::new(); $sf.Alignment='Center'; $sf.LineAlignment='Center'; $g.DrawString('S',$font,$white,[System.Drawing.RectangleF]::new(0,0,256,248),$sf)
-          $ico=[System.Drawing.Icon]::FromHandle($bmp.GetHicon()); New-Item -ItemType Directory -Force src/SpankyhoOptimizer/Assets,src/SpankyhoOptimizer.Setup/Assets,src/SpankyhoOptimizer.Bootstrap/Resources | Out-Null
-          foreach($p in @('src/SpankyhoOptimizer/Assets/App.ico','src/SpankyhoOptimizer.Setup/Assets/App.ico','src/SpankyhoOptimizer.Bootstrap/App.ico')) { $fs=[IO.File]::Create($p); $ico.Save($fs); $fs.Dispose() }
-          $ico.Dispose(); $font.Dispose(); $white.Dispose(); $purple.Dispose(); $sf.Dispose(); $g.Dispose(); $bmp.Dispose()
 
       - uses: actions/setup-dotnet@v5
         with:
@@ -227,34 +49,266 @@ jobs:
         run: |
           dotnet restore src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -p:Platform=x64
           dotnet publish src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:PublishReadyToRun=false -o artifacts/app
-          if (!(Test-Path artifacts/app/SpankyhoOptimizer.exe)) { throw "Main app publish failed" }
-          Compress-Archive artifacts/app/* artifacts/payload.zip -CompressionLevel Optimal -Force
+          if (!(Test-Path artifacts/app/SpankyhoOptimizer.exe)) { throw 'Main app publish failed' }
+          Compress-Archive -Path artifacts/app/* -DestinationPath artifacts/payload.zip -CompressionLevel Optimal -Force
+          Write-Host "Payload ZIP bytes: $((Get-Item artifacts/payload.zip).Length)"
 
-      - name: Build compact WinUI setup
+      - name: Create immediate-start modern installer
         shell: pwsh
         run: |
-          dotnet restore src/SpankyhoOptimizer.Setup/SpankyhoOptimizer.Setup.csproj -p:Platform=x64
-          dotnet publish src/SpankyhoOptimizer.Setup/SpankyhoOptimizer.Setup.csproj -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:PublishReadyToRun=false -o artifacts/setup
-          if (!(Test-Path artifacts/setup/SpankyhoOptimizer.Setup.exe)) { throw "Setup publish failed" }
-          Copy-Item artifacts/payload.zip artifacts/setup/payload.zip
-          Compress-Archive artifacts/setup/* src/SpankyhoOptimizer.Bootstrap/Resources/setup.zip -CompressionLevel Optimal -Force
-          Write-Host "SETUP ZIP BYTES: $((Get-Item src/SpankyhoOptimizer.Bootstrap/Resources/setup.zip).Length)"
+          New-Item -ItemType Directory -Force installer/Resources | Out-Null
+          Copy-Item artifacts/payload.zip installer/Resources/payload.zip
 
-      - name: Build and smoke-test final EXE
+          @'
+          <Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+            <PropertyGroup>
+              <OutputType>WinExe</OutputType>
+              <TargetFramework>net48</TargetFramework>
+              <UseWPF>true</UseWPF>
+              <PlatformTarget>x64</PlatformTarget>
+              <Prefer32Bit>false</Prefer32Bit>
+              <AssemblyName>Spankyho_Optimizer_V12_2_3_Compact_Setup</AssemblyName>
+              <RootNamespace>SpankyhoInstaller</RootNamespace>
+              <ApplicationManifest>app.manifest</ApplicationManifest>
+              <DebugType>none</DebugType>
+              <DebugSymbols>false</DebugSymbols>
+            </PropertyGroup>
+            <ItemGroup>
+              <EmbeddedResource Include="Resources\payload.zip" LogicalName="payload.zip" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content installer/SpankyhoInstaller.csproj -NoNewline
+
+          @'
+          <?xml version="1.0" encoding="utf-8"?>
+          <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+            <assemblyIdentity version="12.2.3.0" name="SpankyhoOptimizer.Setup"/>
+            <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+              <security><requestedPrivileges><requestedExecutionLevel level="requireAdministrator" uiAccess="false" /></requestedPrivileges></security>
+            </trustInfo>
+            <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+              <application><supportedOS Id="{4f476546-9374-4f2e-80f6-4fdf4f6b8fba}" /></application>
+            </compatibility>
+          </assembly>
+          '@ | Set-Content installer/app.manifest -NoNewline
+
+          @'
+          using Microsoft.Win32;
+          using System;
+          using System.Diagnostics;
+          using System.IO;
+          using System.IO.Compression;
+          using System.Linq;
+          using System.Net;
+          using System.Reflection;
+          using System.Threading.Tasks;
+          using System.Windows;
+          using System.Windows.Controls;
+          using System.Windows.Media;
+
+          namespace SpankyhoInstaller
+          {
+              internal static class Program
+              {
+                  [STAThread]
+                  static int Main(string[] args)
+                  {
+                      if (args.Contains("--smoketest"))
+                      {
+                          using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip")) return s == null ? 3 : 0;
+                      }
+                      if (args.Contains("--uninstall")) return Uninstall();
+                      var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+                      app.Run(new InstallerWindow());
+                      return 0;
+                  }
+
+                  static int Uninstall()
+                  {
+                      try
+                      {
+                          var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Spankyho Optimizer");
+                          try { foreach (var p in Process.GetProcessesByName("SpankyhoOptimizer")) p.Kill(); } catch { }
+                          try { File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Spankyho Optimizer.lnk")); } catch { }
+                          try { File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), "Spankyho Optimizer.lnk")); } catch { }
+                          try { Registry.LocalMachine.DeleteSubKeyTree(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SpankyhoOptimizer", false); } catch { }
+                          var cmd = Path.Combine(Path.GetTempPath(), "spankyho_remove.cmd");
+                          File.WriteAllText(cmd, "@echo off\r\ntimeout /t 2 /nobreak >nul\r\nrmdir /s /q \"" + dir + "\"\r\ndel /f /q \"%~f0\"\r\n");
+                          Process.Start(new ProcessStartInfo("cmd.exe", "/c \"" + cmd + "\"") { CreateNoWindow = true, UseShellExecute = false });
+                          MessageBox.Show("Spankyho Optimizer byl odinstalován.", "Spankyho Optimizer", MessageBoxButton.OK, MessageBoxImage.Information);
+                          return 0;
+                      }
+                      catch (Exception ex) { MessageBox.Show(ex.Message, "Odinstalace selhala", MessageBoxButton.OK, MessageBoxImage.Error); return 1; }
+                  }
+              }
+
+              internal sealed class InstallerWindow : Window
+              {
+                  readonly ProgressBar progress = new ProgressBar { Height=8, Minimum=0, Maximum=100, Margin=new Thickness(0,16,0,8) };
+                  readonly TextBlock status = new TextBlock { Text="Připraveno k instalaci", FontSize=14, Opacity=.75, Margin=new Thickness(0,0,0,14) };
+                  readonly Button install = new Button { Content="Nainstalovat", Height=44, MinWidth=150, FontWeight=FontWeights.SemiBold, Margin=new Thickness(0,0,10,0) };
+                  readonly Button close = new Button { Content="Zavřít", Height=44, MinWidth=100 };
+                  readonly CheckBox desktop = new CheckBox { Content="Vytvořit zástupce na ploše", IsChecked=true, Margin=new Thickness(0,8,0,0) };
+                  readonly CheckBox launch = new CheckBox { Content="Po instalaci spustit Optimizer", IsChecked=true, Margin=new Thickness(0,8,0,0) };
+                  readonly string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SpankyhoOptimizer");
+                  string LogPath => Path.Combine(logDir, "setup.log");
+
+                  public InstallerWindow()
+                  {
+                      Title="Spankyho Optimizer V12.2.3"; Width=720; Height=500; MinWidth=640; MinHeight=430; WindowStartupLocation=WindowStartupLocation.CenterScreen;
+                      Background=new SolidColorBrush(Color.FromRgb(15,17,22)); Foreground=Brushes.White;
+                      FontFamily=new FontFamily("Segoe UI");
+                      Content=BuildUi();
+                      install.Click += async (_,__) => await InstallAsync();
+                      close.Click += (_,__) => Close();
+                      Loaded += (_,__) => { try { Directory.CreateDirectory(logDir); Log("Installer UI started"); } catch {} };
+                  }
+
+                  UIElement BuildUi()
+                  {
+                      var root=new Grid { Margin=new Thickness(28) };
+                      root.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto}); root.RowDefinitions.Add(new RowDefinition()); root.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+                      var header=new StackPanel();
+                      header.Children.Add(new TextBlock{Text="SPANKYHO OPTIMIZER",FontSize=12,FontWeight=FontWeights.Bold,Foreground=new SolidColorBrush(Color.FromRgb(122,116,255)),LetterSpacing=1.2});
+                      header.Children.Add(new TextBlock{Text="Moderní Windows 11 optimizer",FontSize=30,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,8,0,4)});
+                      header.Children.Add(new TextBlock{Text=".NET 10 • WinUI 3 • x64 • bez PowerShell core",FontSize=14,Opacity=.65});
+                      Grid.SetRow(header,0); root.Children.Add(header);
+
+                      var card=new Border{CornerRadius=new CornerRadius(16),Background=new SolidColorBrush(Color.FromRgb(24,27,34)),Padding=new Thickness(22),Margin=new Thickness(0,26,0,22)};
+                      var body=new StackPanel();
+                      body.Children.Add(new TextBlock{Text="Instalace V12.2.3",FontSize=19,FontWeight=FontWeights.SemiBold});
+                      body.Children.Add(new TextBlock{Text="Instalátor se otevře okamžitě. Potřebné Microsoft runtime komponenty se případně stáhnou až během instalace a průběh uvidíš tady.",TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,8,0,10),Opacity=.72});
+                      body.Children.Add(desktop); body.Children.Add(launch); body.Children.Add(progress); body.Children.Add(status); card.Child=body;
+                      Grid.SetRow(card,1); root.Children.Add(card);
+
+                      var actions=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};
+                      install.Background=new SolidColorBrush(Color.FromRgb(91,82,230)); install.Foreground=Brushes.White; install.BorderThickness=new Thickness(0);
+                      close.Background=new SolidColorBrush(Color.FromRgb(42,46,56)); close.Foreground=Brushes.White; close.BorderThickness=new Thickness(0);
+                      actions.Children.Add(install); actions.Children.Add(close); Grid.SetRow(actions,2); root.Children.Add(actions);
+                      return root;
+                  }
+
+                  async Task InstallAsync()
+                  {
+                      install.IsEnabled=false; close.IsEnabled=false;
+                      try
+                      {
+                          Directory.CreateDirectory(logDir); Log("Install clicked");
+                          status.Text="Kontroluji .NET 10…"; progress.Value=4;
+                          if (!HasDotNet10()) await DownloadAndRun("https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.10/dotnet-runtime-10.0.10-win-x64.exe","dotnet10.exe","/install /quiet /norestart",5,28);
+                          else { progress.Value=28; Log(".NET 10 already installed"); }
+
+                          status.Text="Kontroluji Windows App Runtime 1.8…";
+                          if (!HasWindowsAppRuntime18()) await DownloadAndRun("https://aka.ms/windowsappsdk/1.8/1.8.260804001/windowsappruntimeinstall-x64.exe","windowsappruntime.exe","--quiet",29,62);
+                          else { progress.Value=62; Log("Windows App Runtime 1.8 already installed"); }
+
+                          status.Text="Instaluji Spankyho Optimizer…"; progress.Value=66;
+                          await Task.Run(()=>InstallPayload());
+                          progress.Value=96; status.Text="Dokončuji instalaci…";
+                          CreateShortcutsAndUninstall(); progress.Value=100; status.Text="Hotovo"; Log("Install complete");
+                          if (launch.IsChecked==true)
+                          {
+                              var exe=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Spankyho Optimizer","SpankyhoOptimizer.exe");
+                              try { Process.Start(new ProcessStartInfo(exe){UseShellExecute=true,WorkingDirectory=Path.GetDirectoryName(exe)}); } catch(Exception ex){ Log("Launch failed: "+ex); MessageBox.Show("Instalace proběhla, ale aplikaci se nepodařilo spustit.\n\n"+ex.Message,"Spankyho Optimizer",MessageBoxButton.OK,MessageBoxImage.Warning); }
+                          }
+                          else MessageBox.Show("Instalace byla dokončena.","Spankyho Optimizer",MessageBoxButton.OK,MessageBoxImage.Information);
+                          Close();
+                      }
+                      catch(Exception ex)
+                      {
+                          Log("FATAL: "+ex); status.Text="Instalace selhala"; MessageBox.Show(ex.Message+"\n\nLog: "+LogPath,"Instalace selhala",MessageBoxButton.OK,MessageBoxImage.Error); install.IsEnabled=true; close.IsEnabled=true;
+                      }
+                  }
+
+                  bool HasDotNet10()
+                  {
+                      try { var p=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"dotnet","shared","Microsoft.NETCore.App"); return Directory.Exists(p)&&Directory.GetDirectories(p).Any(x=>Path.GetFileName(x).StartsWith("10.")); } catch { return false; }
+                  }
+
+                  bool HasWindowsAppRuntime18()
+                  {
+                      try
+                      {
+                          using(var k=Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore\Applications"))
+                              return k!=null && k.GetSubKeyNames().Any(n=>n.IndexOf("Microsoft.WindowsAppRuntime.1.8",StringComparison.OrdinalIgnoreCase)>=0);
+                      } catch { return false; }
+                  }
+
+                  async Task DownloadAndRun(string url,string name,string args,double from,double to)
+                  {
+                      var path=Path.Combine(Path.GetTempPath(),name); try { if(File.Exists(path)) File.Delete(path); } catch{}
+                      status.Text="Stahuji "+name.Replace(".exe","")+"…"; Log("Downloading "+url);
+                      using(var wc=new WebClient())
+                      {
+                          wc.DownloadProgressChanged += (_,e)=> Dispatcher.Invoke(()=>progress.Value=from+(to-from-4)*(e.ProgressPercentage/100.0));
+                          await wc.DownloadFileTaskAsync(new Uri(url),path);
+                      }
+                      status.Text="Instaluji potřebnou komponentu…"; progress.Value=to-3;
+                      var p=Process.Start(new ProcessStartInfo(path,args){UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.GetDirectoryName(path)});
+                      if(p==null) throw new InvalidOperationException("Nelze spustit "+name); await Task.Run(()=>p.WaitForExit()); var code=p.ExitCode; p.Dispose();
+                      try { File.Delete(path); } catch{}
+                      if(code!=0 && code!=3010) throw new InvalidOperationException(name+" skončil s kódem "+code); progress.Value=to; Log(name+" installed, code="+code);
+                  }
+
+                  void InstallPayload()
+                  {
+                      var dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Spankyho Optimizer");
+                      try { foreach(var p in Process.GetProcessesByName("SpankyhoOptimizer")) p.Kill(); } catch{}
+                      Directory.CreateDirectory(dir);
+                      foreach(var f in Directory.GetFiles(dir)) { try { File.Delete(f); } catch{} }
+                      foreach(var d in Directory.GetDirectories(dir)) { try { Directory.Delete(d,true); } catch{} }
+                      using(var s=Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip")??throw new InvalidOperationException("Chybí instalační payload"))
+                      using(var z=new ZipArchive(s,ZipArchiveMode.Read))
+                      {
+                          foreach(var e in z.Entries)
+                          {
+                              var dst=Path.GetFullPath(Path.Combine(dir,e.FullName)); if(!dst.StartsWith(Path.GetFullPath(dir)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Neplatná cesta v archivu");
+                              if(string.IsNullOrEmpty(e.Name)){Directory.CreateDirectory(dst);continue;} Directory.CreateDirectory(Path.GetDirectoryName(dst)); e.ExtractToFile(dst,true);
+                          }
+                      }
+                      File.Copy(Assembly.GetExecutingAssembly().Location,Path.Combine(dir,"SpankyhoOptimizer.Uninstall.exe"),true);
+                  }
+
+                  void CreateShortcutsAndUninstall()
+                  {
+                      var dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Spankyho Optimizer"); var exe=Path.Combine(dir,"SpankyhoOptimizer.exe");
+                      if(desktop.IsChecked==true) CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"Spankyho Optimizer.lnk"),exe,dir);
+                      CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),"Spankyho Optimizer.lnk"),exe,dir);
+                      using(var k=Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SpankyhoOptimizer"))
+                      {
+                          k.SetValue("DisplayName","Spankyho Optimizer"); k.SetValue("DisplayVersion","12.2.3"); k.SetValue("Publisher","Spankyho"); k.SetValue("InstallLocation",dir); k.SetValue("DisplayIcon",exe); k.SetValue("UninstallString","\""+Path.Combine(dir,"SpankyhoOptimizer.Uninstall.exe")+"\" --uninstall"); k.SetValue("NoModify",1,RegistryValueKind.DWord); k.SetValue("NoRepair",1,RegistryValueKind.DWord);
+                      }
+                  }
+
+                  void CreateShortcut(string path,string target,string work)
+                  {
+                      try { dynamic shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")); dynamic sc=shell.CreateShortcut(path); sc.TargetPath=target; sc.WorkingDirectory=work; sc.IconLocation=target+",0"; sc.Save(); } catch(Exception ex){ Log("Shortcut failed: "+ex.Message); }
+                  }
+
+                  void Log(string text) { try { Directory.CreateDirectory(logDir); File.AppendAllText(LogPath,"["+DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff")+"] "+text+Environment.NewLine); } catch{} }
+              }
+          }
+          '@ | Set-Content installer/Program.cs -NoNewline
+
+      - name: Build and smoke-test installer
         shell: pwsh
         run: |
-          dotnet publish src/SpankyhoOptimizer.Bootstrap/SpankyhoOptimizer.Bootstrap.csproj -c Release -r win-x64 -p:PublishAot=true -o artifacts/final
-          $exe='artifacts/final/Spankyho_Optimizer_V12_2_2_Compact_Setup.exe'
-          if (!(Test-Path $exe)) { throw "Final setup EXE missing" }
-          Write-Host "FINAL EXE BYTES: $((Get-Item $exe).Length)"
-          Get-FileHash $exe -Algorithm SHA256 | Format-List | Tee-Object artifacts/final/SHA256.txt
-          & $exe --extract-only
-          if ($LASTEXITCODE -ne 0) { throw "Bootstrap extraction smoke test failed: $LASTEXITCODE" }
+          dotnet restore installer/SpankyhoInstaller.csproj
+          dotnet build installer/SpankyhoInstaller.csproj -c Release -p:Platform=x64
+          $exe='installer/bin/Release/net48/Spankyho_Optimizer_V12_2_3_Compact_Setup.exe'
+          if(!(Test-Path $exe)){ throw 'Final EXE missing' }
+          & $exe --smoketest
+          if($LASTEXITCODE -ne 0){ throw "Smoke test failed: $LASTEXITCODE" }
+          New-Item -ItemType Directory -Force artifacts/final | Out-Null
+          Copy-Item $exe artifacts/final/Spankyho_Optimizer_V12_2_3_Compact_Setup.exe
+          $size=(Get-Item artifacts/final/Spankyho_Optimizer_V12_2_3_Compact_Setup.exe).Length
+          Write-Host "FINAL EXE BYTES: $size"
+          Get-FileHash artifacts/final/Spankyho_Optimizer_V12_2_3_Compact_Setup.exe -Algorithm SHA256 | Format-List | Tee-Object -FilePath artifacts/final/SHA256.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Spankyho_Optimizer_V12_2_2_Compact_Setup
+          name: Spankyho_Optimizer_V12_2_3_Compact_Setup
           path: |
-            artifacts/final/Spankyho_Optimizer_V12_2_2_Compact_Setup.exe
+            artifacts/final/Spankyho_Optimizer_V12_2_3_Compact_Setup.exe
             artifacts/final/SHA256.txt
           compression-level: 0
