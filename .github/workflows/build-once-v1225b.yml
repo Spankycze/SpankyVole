@@ -1,0 +1,264 @@
+name: One-shot Spankyho Optimizer V12.2.5 retry
+
+on:
+  push:
+    branches: [ spankyho-optimizer-v12-winui3 ]
+    paths: [ '.github/workflows/build-once-v1225b.yml' ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild source
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem buildsrc/chunk*.txt | Sort-Object Name
+          if ($parts.Count -ne 9) { throw "Expected 9 source chunks" }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          [IO.File]::WriteAllBytes('source.zip',[Convert]::FromBase64String($b64))
+          Expand-Archive source.zip . -Force
+
+      - name: Fix WinUI XAML resources and deployment
+        shell: pwsh
+        run: |
+          @'
+          <Application
+              x:Class="SpankyhoOptimizer.App"
+              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+              xmlns:muxc="using:Microsoft.UI.Xaml.Controls">
+              <Application.Resources>
+                  <ResourceDictionary>
+                      <ResourceDictionary.MergedDictionaries>
+                          <muxc:XamlControlsResources />
+                      </ResourceDictionary.MergedDictionaries>
+                      <ResourceDictionary.ThemeDictionaries>
+                          <ResourceDictionary x:Key="Light">
+                              <SolidColorBrush x:Key="SpankyAccentBrush" Color="#5B5BD6"/>
+                              <SolidColorBrush x:Key="SpankyAccentSoftBrush" Color="#145B5BD6"/>
+                              <SolidColorBrush x:Key="SpankySuccessBrush" Color="#0F7B52"/>
+                              <SolidColorBrush x:Key="SpankyWarningBrush" Color="#B35C00"/>
+                              <SolidColorBrush x:Key="SpankyCardBrush" Color="#F7F7F9"/>
+                              <SolidColorBrush x:Key="SpankyCardBorderBrush" Color="#18000000"/>
+                          </ResourceDictionary>
+                          <ResourceDictionary x:Key="Dark">
+                              <SolidColorBrush x:Key="SpankyAccentBrush" Color="#8B8BFF"/>
+                              <SolidColorBrush x:Key="SpankyAccentSoftBrush" Color="#248B8BFF"/>
+                              <SolidColorBrush x:Key="SpankySuccessBrush" Color="#52C99A"/>
+                              <SolidColorBrush x:Key="SpankyWarningBrush" Color="#FFB65A"/>
+                              <SolidColorBrush x:Key="SpankyCardBrush" Color="#1C1D22"/>
+                              <SolidColorBrush x:Key="SpankyCardBorderBrush" Color="#20FFFFFF"/>
+                          </ResourceDictionary>
+                          <ResourceDictionary x:Key="Default">
+                              <SolidColorBrush x:Key="SpankyAccentBrush" Color="#5B5BD6"/>
+                              <SolidColorBrush x:Key="SpankyAccentSoftBrush" Color="#145B5BD6"/>
+                              <SolidColorBrush x:Key="SpankySuccessBrush" Color="#0F7B52"/>
+                              <SolidColorBrush x:Key="SpankyWarningBrush" Color="#B35C00"/>
+                              <SolidColorBrush x:Key="SpankyCardBrush" Color="#F7F7F9"/>
+                              <SolidColorBrush x:Key="SpankyCardBorderBrush" Color="#18000000"/>
+                          </ResourceDictionary>
+                      </ResourceDictionary.ThemeDictionaries>
+                      <Style x:Key="SectionCardStyle" TargetType="Border">
+                          <Setter Property="Background" Value="{ThemeResource SpankyCardBrush}"/>
+                          <Setter Property="BorderBrush" Value="{ThemeResource SpankyCardBorderBrush}"/>
+                          <Setter Property="BorderThickness" Value="1"/>
+                          <Setter Property="CornerRadius" Value="12"/>
+                          <Setter Property="Padding" Value="16"/>
+                          <Setter Property="Margin" Value="0,0,0,10"/>
+                      </Style>
+                      <Style x:Key="PillButtonStyle" TargetType="Button">
+                          <Setter Property="CornerRadius" Value="10"/>
+                          <Setter Property="Padding" Value="14,8"/>
+                          <Setter Property="MinHeight" Value="36"/>
+                      </Style>
+                  </ResourceDictionary>
+              </Application.Resources>
+          </Application>
+          '@ | Set-Content src/SpankyhoOptimizer/App.xaml -Encoding utf8 -NoNewline
+
+          $mw='src/SpankyhoOptimizer/MainWindow.xaml'
+          $x=Get-Content $mw -Raw
+          $x=$x.Replace(' FontFamily="Segoe UI Variable Text"','')
+          $x=$x.Replace('{ThemeResource CardBackgroundFillColorDefaultBrush}','{ThemeResource SpankyCardBrush}')
+          Set-Content $mw $x -Encoding utf8 -NoNewline
+
+          $p='src/SpankyhoOptimizer/SpankyhoOptimizer.csproj'
+          $s=Get-Content $p -Raw
+          $s=$s.Replace('Version="2.4.0"','Version="1.8.260804001"')
+          $s=$s.Replace('<WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>','<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>')
+          $s=$s.Replace('<PublishReadyToRun>true</PublishReadyToRun>','<PublishReadyToRun>false</PublishReadyToRun>')
+          $s=$s.Replace('<Version>12.2.0</Version>','<Version>12.2.5</Version>')
+          Set-Content $p $s -Encoding utf8 -NoNewline
+
+          Get-ChildItem src/SpankyhoOptimizer -Recurse -Include *.cs | ForEach-Object {
+            $c=Get-Content $_.FullName -Raw
+            $c=$c.Replace('SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };','SystemBackdrop = new MicaBackdrop();')
+            Set-Content $_.FullName $c -Encoding utf8 -NoNewline
+          }
+
+      - name: Generate app icon
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          New-Item -ItemType Directory -Force src/SpankyhoOptimizer/Assets | Out-Null
+          $bmp=[System.Drawing.Bitmap]::new(256,256)
+          $g=[System.Drawing.Graphics]::FromImage($bmp); $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias; $g.Clear([System.Drawing.Color]::Transparent)
+          $b=[System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255,91,91,214)); $g.FillEllipse($b,8,8,240,240)
+          $f=[System.Drawing.Font]::new('Segoe UI',132,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel); $w=[System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
+          $sf=[System.Drawing.StringFormat]::new(); $sf.Alignment=[System.Drawing.StringAlignment]::Center; $sf.LineAlignment=[System.Drawing.StringAlignment]::Center
+          $g.DrawString('S',$f,$w,[System.Drawing.RectangleF]::new(0,0,256,248),$sf)
+          $ico=[System.Drawing.Icon]::FromHandle($bmp.GetHicon()); $fs=[IO.File]::Create('src/SpankyhoOptimizer/Assets/App.ico'); $ico.Save($fs); $fs.Dispose()
+          $ico.Dispose(); $f.Dispose(); $w.Dispose(); $b.Dispose(); $sf.Dispose(); $g.Dispose(); $bmp.Dispose()
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build self-contained WinUI app
+        shell: pwsh
+        run: |
+          dotnet restore src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -p:Platform=x64
+          dotnet publish src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishReadyToRun=false -o artifacts/app
+          if (!(Test-Path artifacts/app/SpankyhoOptimizer.exe)) { throw 'Main app publish failed' }
+
+      - name: Launch smoke test main WinUI app
+        shell: pwsh
+        run: |
+          $exe=(Resolve-Path 'artifacts/app/SpankyhoOptimizer.exe').Path
+          $p=Start-Process $exe -PassThru -WorkingDirectory (Split-Path $exe)
+          Start-Sleep -Seconds 7
+          $p.Refresh()
+          if ($p.HasExited) { throw "Main app exited during XAML smoke test. ExitCode=$($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          Write-Host 'Main WinUI window survived 7-second XAML smoke test.'
+          Compress-Archive -Path artifacts/app/* -DestinationPath artifacts/payload.zip -CompressionLevel Optimal -Force
+
+      - name: Create clean high-contrast installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force installer/Resources | Out-Null
+          Copy-Item artifacts/payload.zip installer/Resources/payload.zip
+          @'
+          <Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+            <PropertyGroup>
+              <OutputType>WinExe</OutputType>
+              <TargetFramework>net48</TargetFramework>
+              <UseWPF>true</UseWPF>
+              <PlatformTarget>x64</PlatformTarget>
+              <Prefer32Bit>false</Prefer32Bit>
+              <AssemblyName>Spankyho_Optimizer_V12_2_5_Setup</AssemblyName>
+              <RootNamespace>SpankyhoInstaller</RootNamespace>
+              <ApplicationManifest>app.manifest</ApplicationManifest>
+              <DebugType>none</DebugType>
+              <DebugSymbols>false</DebugSymbols>
+            </PropertyGroup>
+            <ItemGroup>
+              <EmbeddedResource Include="Resources\payload.zip" LogicalName="payload.zip" />
+              <Reference Include="System.IO.Compression" />
+              <Reference Include="System.IO.Compression.FileSystem" />
+              <Reference Include="Microsoft.CSharp" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content installer/SpankyhoInstaller.csproj -Encoding utf8 -NoNewline
+
+          @'
+          <?xml version="1.0" encoding="utf-8"?>
+          <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+            <assemblyIdentity version="12.2.5.0" name="SpankyhoOptimizer.Setup"/>
+            <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"><security><requestedPrivileges><requestedExecutionLevel level="requireAdministrator" uiAccess="false" /></requestedPrivileges></security></trustInfo>
+          </assembly>
+          '@ | Set-Content installer/app.manifest -Encoding utf8 -NoNewline
+
+          @'
+          using Microsoft.Win32;
+          using System;
+          using System.Diagnostics;
+          using System.IO;
+          using System.IO.Compression;
+          using System.Linq;
+          using System.Reflection;
+          using System.Threading.Tasks;
+          using System.Windows;
+          using System.Windows.Controls;
+          using System.Windows.Media;
+
+          namespace SpankyhoInstaller
+          {
+              internal static class Program
+              {
+                  [STAThread]
+                  static int Main(string[] args)
+                  {
+                      if(args.Contains("--smoketest")){using(var s=Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip"))return s==null?3:0;}
+                      if(args.Contains("--uninstall"))return Uninstall();
+                      var app=new Application{ShutdownMode=ShutdownMode.OnMainWindowClose}; app.Run(new InstallerWindow()); return 0;
+                  }
+                  static int Uninstall(){try{var dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Spankyho Optimizer");try{foreach(var p in Process.GetProcessesByName("SpankyhoOptimizer"))p.Kill();}catch{}try{File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"Spankyho Optimizer.lnk"));}catch{}try{File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),"Spankyho Optimizer.lnk"));}catch{}try{Registry.LocalMachine.DeleteSubKeyTree(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SpankyhoOptimizer",false);}catch{}var cmd=Path.Combine(Path.GetTempPath(),"spankyho_remove.cmd");File.WriteAllText(cmd,"@echo off\r\ntimeout /t 2 /nobreak >nul\r\nrmdir /s /q \""+dir+"\"\r\ndel /f /q \"%~f0\"\r\n");Process.Start(new ProcessStartInfo("cmd.exe","/c \""+cmd+"\""){CreateNoWindow=true,UseShellExecute=false});return 0;}catch{return 1;}}
+              }
+
+              internal sealed class InstallerWindow:Window
+              {
+                  readonly SolidColorBrush Accent=new SolidColorBrush(Color.FromRgb(82,72,226));
+                  readonly SolidColorBrush TextMain=new SolidColorBrush(Color.FromRgb(24,26,32));
+                  readonly SolidColorBrush TextSub=new SolidColorBrush(Color.FromRgb(86,91,103));
+                  readonly ProgressBar Progress=new ProgressBar{Height=10,Minimum=0,Maximum=100,Value=0,Margin=new Thickness(0,10,0,6)};
+                  readonly TextBlock Status=new TextBlock{Text="Připraveno k instalaci",FontSize=15,FontWeight=FontWeights.SemiBold};
+                  readonly TextBlock Percent=new TextBlock{Text="0 %",FontSize=14,FontWeight=FontWeights.SemiBold,HorizontalAlignment=HorizontalAlignment.Right};
+                  readonly CheckBox Desktop=new CheckBox{Content="Vytvořit zástupce na ploše",IsChecked=true,FontSize=15,Margin=new Thickness(0,5,0,8)};
+                  readonly CheckBox Launch=new CheckBox{Content="Po instalaci spustit aplikaci",IsChecked=true,FontSize=15};
+                  readonly Button Install=new Button{Content="Nainstalovat",MinWidth=160,Height=46,FontSize=15,FontWeight=FontWeights.SemiBold,Foreground=Brushes.White,BorderThickness=new Thickness(0)};
+                  readonly Button Cancel=new Button{Content="Zrušit",MinWidth=105,Height=46,FontSize=15,Margin=new Thickness(10,0,0,0)};
+                  readonly string LogDir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"SpankyhoOptimizer"); string LogPath=>Path.Combine(LogDir,"setup.log");
+
+                  public InstallerWindow(){Title="Spankyho Optimizer V12.2.5 Setup";Width=760;Height=600;MinWidth=680;MinHeight=540;WindowStartupLocation=WindowStartupLocation.CenterScreen;Background=new SolidColorBrush(Color.FromRgb(246,247,250));Foreground=TextMain;FontFamily=new FontFamily("Segoe UI");Install.Background=Accent;Cancel.Background=Brushes.White;Cancel.Foreground=TextMain;Cancel.BorderBrush=new SolidColorBrush(Color.FromRgb(210,213,220));Progress.Foreground=Accent;Content=BuildUi();Install.Click+=async(_,__)=>await InstallAsync();Cancel.Click+=(_,__)=>Close();}
+
+                  UIElement BuildUi()
+                  {
+                      var root=new Grid{Margin=new Thickness(38,30,38,30)};root.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});root.RowDefinitions.Add(new RowDefinition());root.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
+                      var head=new Grid{Margin=new Thickness(0,0,0,24)};head.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});head.ColumnDefinitions.Add(new ColumnDefinition());
+                      var logo=new Border{Width=54,Height=54,CornerRadius=new CornerRadius(14),Background=Accent,VerticalAlignment=VerticalAlignment.Top};logo.Child=new TextBlock{Text="S",Foreground=Brushes.White,FontWeight=FontWeights.Bold,FontSize=29,HorizontalAlignment=HorizontalAlignment.Center,VerticalAlignment=VerticalAlignment.Center};head.Children.Add(logo);
+                      var hs=new StackPanel{Margin=new Thickness(16,0,0,0)};Grid.SetColumn(hs,1);hs.Children.Add(new TextBlock{Text="Instalace Spankyho Optimizer",FontSize=29,FontWeight=FontWeights.SemiBold,Foreground=TextMain});hs.Children.Add(new TextBlock{Text="Rychlá a přehledná instalace pro Windows 11",FontSize=15,Foreground=TextSub,Margin=new Thickness(0,5,0,0)});head.Children.Add(hs);root.Children.Add(head);
+                      var card=new Border{Background=Brushes.White,CornerRadius=new CornerRadius(18),BorderBrush=new SolidColorBrush(Color.FromRgb(224,226,232)),BorderThickness=new Thickness(1),Padding=new Thickness(24),Margin=new Thickness(0,0,0,20)};Grid.SetRow(card,1);
+                      var body=new StackPanel();body.Children.Add(new TextBlock{Text="Umístění instalace",FontSize=14,FontWeight=FontWeights.SemiBold,Foreground=TextMain,Margin=new Thickness(0,0,0,8)});
+                      var pathBox=new Border{Background=new SolidColorBrush(Color.FromRgb(247,248,250)),CornerRadius=new CornerRadius(10),BorderBrush=new SolidColorBrush(Color.FromRgb(222,224,230)),BorderThickness=new Thickness(1),Padding=new Thickness(14,11,14,11),Margin=new Thickness(0,0,0,20)};pathBox.Child=new TextBlock{Text=@"C:\Program Files\Spankyho Optimizer",FontSize=14,Foreground=TextMain};body.Children.Add(pathBox);
+                      body.Children.Add(new TextBlock{Text="Možnosti",FontSize=14,FontWeight=FontWeights.SemiBold,Foreground=TextMain,Margin=new Thickness(0,0,0,8)});body.Children.Add(Desktop);body.Children.Add(Launch);body.Children.Add(new Border{Height=1,Background=new SolidColorBrush(Color.FromRgb(232,234,239)),Margin=new Thickness(0,22,0,20)});
+                      body.Children.Add(new TextBlock{Text="Stav instalace",FontSize=14,FontWeight=FontWeights.SemiBold,Foreground=TextMain,Margin=new Thickness(0,0,0,8)});var sr=new Grid();sr.ColumnDefinitions.Add(new ColumnDefinition());sr.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});sr.Children.Add(Status);Grid.SetColumn(Percent,1);sr.Children.Add(Percent);body.Children.Add(sr);body.Children.Add(Progress);body.Children.Add(new TextBlock{Text="Aplikace obsahuje potřebný .NET 10 i Windows App SDK runtime. Po instalaci se nic dalšího nestahuje.",FontSize=13,Foreground=TextSub,TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,14,0,0)});card.Child=body;root.Children.Add(card);
+                      var foot=new Grid();foot.ColumnDefinitions.Add(new ColumnDefinition());foot.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});Grid.SetRow(foot,2);foot.Children.Add(new TextBlock{Text=".NET 10  •  WinUI 3  •  x64",FontSize=13,Foreground=TextSub,VerticalAlignment=VerticalAlignment.Center});var buttons=new StackPanel{Orientation=Orientation.Horizontal};Grid.SetColumn(buttons,1);buttons.Children.Add(Install);buttons.Children.Add(Cancel);foot.Children.Add(buttons);root.Children.Add(foot);return root;
+                  }
+
+                  async Task InstallAsync(){Install.IsEnabled=false;Cancel.IsEnabled=false;try{Directory.CreateDirectory(LogDir);Log("Install start");Set(8,"Příprava instalačních souborů");await Task.Run(()=>InstallPayload());Set(82,"Vytváření zástupců");CreateShortcutsAndUninstall();Set(100,"Instalace dokončena");Log("Install complete");if(Launch.IsChecked==true){var exe=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Spankyho Optimizer","SpankyhoOptimizer.exe");Process.Start(new ProcessStartInfo(exe){UseShellExecute=true,WorkingDirectory=Path.GetDirectoryName(exe)});}MessageBox.Show("Spankyho Optimizer byl úspěšně nainstalován.","Instalace dokončena",MessageBoxButton.OK,MessageBoxImage.Information);Close();}catch(Exception ex){Log("FATAL "+ex);MessageBox.Show(ex.Message+"\n\nLog: "+LogPath,"Instalace selhala",MessageBoxButton.OK,MessageBoxImage.Error);Install.IsEnabled=true;Cancel.IsEnabled=true;}}
+                  void Set(double v,string text){Dispatcher.Invoke(()=>{Progress.Value=v;Percent.Text=((int)v)+" %";Status.Text=text;});}
+                  void InstallPayload(){var dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Spankyho Optimizer");try{foreach(var p in Process.GetProcessesByName("SpankyhoOptimizer"))p.Kill();}catch{}Directory.CreateDirectory(dir);foreach(var f in Directory.GetFiles(dir)){try{File.Delete(f);}catch{}}foreach(var d in Directory.GetDirectories(dir)){try{Directory.Delete(d,true);}catch{}}using(var s=Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip")??throw new InvalidOperationException("Chybí instalační data"))using(var z=new ZipArchive(s,ZipArchiveMode.Read)){int done=0,total=Math.Max(1,z.Entries.Count);foreach(var e in z.Entries){var dst=Path.GetFullPath(Path.Combine(dir,e.FullName));if(!dst.StartsWith(Path.GetFullPath(dir)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Neplatná cesta v archivu");if(string.IsNullOrEmpty(e.Name)){Directory.CreateDirectory(dst);}else{Directory.CreateDirectory(Path.GetDirectoryName(dst));using(var i=e.Open())using(var o=new FileStream(dst,FileMode.Create,FileAccess.Write,FileShare.None))i.CopyTo(o);}done++;if(done%5==0)Set(8+70.0*done/total,"Kopírování souborů");}}File.Copy(Assembly.GetExecutingAssembly().Location,Path.Combine(dir,"SpankyhoOptimizer.Uninstall.exe"),true);}
+                  void CreateShortcutsAndUninstall(){var dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),"Spankyho Optimizer");var exe=Path.Combine(dir,"SpankyhoOptimizer.exe");if(Desktop.IsChecked==true)Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),"Spankyho Optimizer.lnk"),exe,dir);Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms),"Spankyho Optimizer.lnk"),exe,dir);using(var k=Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SpankyhoOptimizer")){k.SetValue("DisplayName","Spankyho Optimizer");k.SetValue("DisplayVersion","12.2.5");k.SetValue("Publisher","Spankyho");k.SetValue("InstallLocation",dir);k.SetValue("DisplayIcon",exe);k.SetValue("UninstallString","\""+Path.Combine(dir,"SpankyhoOptimizer.Uninstall.exe")+"\" --uninstall");k.SetValue("NoModify",1,RegistryValueKind.DWord);k.SetValue("NoRepair",1,RegistryValueKind.DWord);}}
+                  void Shortcut(string path,string target,string work){try{dynamic sh=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));dynamic sc=sh.CreateShortcut(path);sc.TargetPath=target;sc.WorkingDirectory=work;sc.IconLocation=target+",0";sc.Save();}catch(Exception ex){Log("Shortcut: "+ex.Message);}}
+                  void Log(string t){try{Directory.CreateDirectory(LogDir);File.AppendAllText(LogPath,"["+DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff")+"] "+t+Environment.NewLine);}catch{}}
+              }
+          }
+          '@ | Set-Content installer/Program.cs -Encoding utf8 -NoNewline
+
+      - name: Build and smoke-test installer
+        shell: pwsh
+        run: |
+          dotnet restore installer/SpankyhoInstaller.csproj
+          dotnet build installer/SpankyhoInstaller.csproj -c Release -p:Platform=x64
+          $exe=(Resolve-Path 'installer/bin/x64/Release/net48/Spankyho_Optimizer_V12_2_5_Setup.exe').Path
+          & $exe --smoketest
+          if($LASTEXITCODE -ne 0){throw "Installer smoke test failed: $LASTEXITCODE"}
+          New-Item -ItemType Directory -Force artifacts/final | Out-Null
+          Copy-Item $exe artifacts/final/Spankyho_Optimizer_V12_2_5_Setup.exe
+          Get-FileHash artifacts/final/Spankyho_Optimizer_V12_2_5_Setup.exe -Algorithm SHA256 | Format-List | Out-File artifacts/final/SHA256.txt
+          Get-Item artifacts/final/Spankyho_Optimizer_V12_2_5_Setup.exe | Select-Object Name,Length | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Spankyho_Optimizer_V12_2_5_Setup
+          path: |
+            artifacts/final/Spankyho_Optimizer_V12_2_5_Setup.exe
+            artifacts/final/SHA256.txt
+          compression-level: 0
+          retention-days: 1
