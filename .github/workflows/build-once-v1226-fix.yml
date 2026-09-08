@@ -1,0 +1,130 @@
+name: One-shot Spankyho Optimizer V12.2.6 fixed
+
+on:
+  push:
+    branches: [ spankyho-optimizer-v12-winui3 ]
+    paths: [ '.github/workflows/build-once-v1226-fix.yml' ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild source
+        shell: pwsh
+        run: |
+          $parts=Get-ChildItem buildsrc/chunk*.txt | Sort-Object Name
+          if($parts.Count -ne 9){throw 'Expected 9 source chunks'}
+          $b64=($parts|ForEach-Object{(Get-Content $_.FullName -Raw).Trim()}) -join ''
+          [IO.File]::WriteAllBytes('source.zip',[Convert]::FromBase64String($b64))
+          Expand-Archive source.zip . -Force
+
+      - name: Apply code-built WinUI shell from previous one-shot
+        shell: pwsh
+        run: |
+          $wf=Get-Content '.github/workflows/build-once-v1226.yml' -Raw
+          function Extract-SetContent([string]$target) {
+            $escaped=[regex]::Escape($target)
+            $pattern="(?s)@'\r?\n(?<body>.*?)\r?\n\s*'@\s*\|\s*Set-Content\s+$escaped"
+            $m=[regex]::Match($wf,$pattern)
+            if(!$m.Success){throw "Could not extract $target"}
+            return $m.Groups['body'].Value
+          }
+          Extract-SetContent 'src/SpankyhoOptimizer/App.xaml' | Set-Content 'src/SpankyhoOptimizer/App.xaml' -Encoding utf8 -NoNewline
+          Extract-SetContent 'src/SpankyhoOptimizer/MainWindow.xaml' | Set-Content 'src/SpankyhoOptimizer/MainWindow.xaml' -Encoding utf8 -NoNewline
+          Extract-SetContent 'src/SpankyhoOptimizer/MainWindow.Shell.cs' | Set-Content 'src/SpankyhoOptimizer/MainWindow.Shell.cs' -Encoding utf8 -NoNewline
+
+          $mc='src/SpankyhoOptimizer/MainWindow.xaml.cs'
+          $c=Get-Content $mc -Raw
+          $c=$c.Replace('        InitializeComponent();',"        InitializeComponent();`r`n        BuildShell();")
+          $c=$c.Replace('        SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };','        try { SystemBackdrop = new MicaBackdrop(); } catch (Exception ex) { LogService.Error("Backdrop setup failed", ex); }')
+          $c=$c.Replace('        ConfigureWindow();','        try { ConfigureWindow(); } catch (Exception ex) { LogService.Error("Window configuration failed", ex); }')
+          Set-Content $mc $c -Encoding utf8 -NoNewline
+
+          $p='src/SpankyhoOptimizer/SpankyhoOptimizer.csproj'
+          $s=Get-Content $p -Raw
+          $s=$s.Replace('Version="2.4.0"','Version="1.8.260804001"')
+          $s=$s.Replace('<WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>','<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>')
+          $s=$s.Replace('<PublishReadyToRun>true</PublishReadyToRun>','<PublishReadyToRun>false</PublishReadyToRun>')
+          $s=$s.Replace('<Version>12.2.0</Version>','<Version>12.2.6</Version>')
+          Set-Content $p $s -Encoding utf8 -NoNewline
+
+      - name: Generate app icon
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          New-Item -ItemType Directory -Force src/SpankyhoOptimizer/Assets|Out-Null
+          $bmp=[System.Drawing.Bitmap]::new(256,256);$g=[System.Drawing.Graphics]::FromImage($bmp);$g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias;$g.Clear([System.Drawing.Color]::Transparent)
+          $b=[System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255,99,102,241));$g.FillEllipse($b,8,8,240,240)
+          $f=[System.Drawing.Font]::new('Segoe UI',132,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel);$w=[System.Drawing.SolidBrush]::new([System.Drawing.Color]::White);$sf=[System.Drawing.StringFormat]::new();$sf.Alignment=[System.Drawing.StringAlignment]::Center;$sf.LineAlignment=[System.Drawing.StringAlignment]::Center;$g.DrawString('S',$f,$w,[System.Drawing.RectangleF]::new(0,0,256,248),$sf)
+          $ico=[System.Drawing.Icon]::FromHandle($bmp.GetHicon());$fs=[IO.File]::Create('src/SpankyhoOptimizer/Assets/App.ico');$ico.Save($fs);$fs.Dispose();$ico.Dispose();$f.Dispose();$w.Dispose();$b.Dispose();$sf.Dispose();$g.Dispose();$bmp.Dispose()
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build self-contained WinUI app
+        shell: pwsh
+        run: |
+          dotnet restore src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -p:Platform=x64
+          dotnet publish src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishReadyToRun=false -o artifacts/app
+          if(!(Test-Path artifacts/app/SpankyhoOptimizer.exe)){throw 'Main app missing'}
+
+      - name: Mandatory WinUI startup test
+        shell: pwsh
+        run: |
+          $exe=(Resolve-Path 'artifacts/app/SpankyhoOptimizer.exe').Path
+          $p=Start-Process $exe -PassThru -WorkingDirectory (Split-Path $exe)
+          Start-Sleep -Seconds 8
+          $p.Refresh()
+          if($p.HasExited){
+            $log=Join-Path $env:ProgramData 'SpankyhoOptimizerV12\optimizer.log'
+            if(Test-Path $log){Get-Content $log -Tail 120}
+            throw "Main app startup failed. ExitCode=$($p.ExitCode)"
+          }
+          Stop-Process -Id $p.Id -Force
+          Write-Host 'MAIN APP STARTUP TEST PASSED'
+          Compress-Archive -Path artifacts/app/* -DestinationPath artifacts/payload.zip -CompressionLevel Optimal -Force
+
+      - name: Materialize redesigned readable installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force installer/Resources|Out-Null
+          Copy-Item artifacts/payload.zip installer/Resources/payload.zip
+          $wf=Get-Content '.github/workflows/build-once-v1226.yml' -Raw
+          function Extract-Installer([string]$marker,[string]$dest) {
+            $escaped=[regex]::Escape($marker)
+            $pattern="(?s)@'\r?\n(?<body>.*?)\r?\n\s*'@\s*\|\s*Set-Content\s+$escaped"
+            $m=[regex]::Matches($wf,$pattern) | Select-Object -Last 1
+            if(!$m.Success){throw "Could not extract installer file $dest"}
+            $m.Groups['body'].Value | Set-Content $dest -Encoding utf8 -NoNewline
+          }
+          Extract-Installer 'installer/SpankyhoInstaller.csproj' 'installer/SpankyhoInstaller.csproj'
+          Extract-Installer 'installer/app.manifest' 'installer/app.manifest'
+          Extract-Installer 'installer/Program.cs' 'installer/Program.cs'
+
+      - name: Build and smoke-test installer
+        shell: pwsh
+        run: |
+          dotnet restore installer/SpankyhoInstaller.csproj
+          dotnet build installer/SpankyhoInstaller.csproj -c Release -p:Platform=x64
+          $exe=(Resolve-Path 'installer/bin/x64/Release/net48/Spankyho_Optimizer_V12_2_6_Setup.exe').Path
+          & $exe --smoketest
+          if($LASTEXITCODE -ne 0){throw "Installer smoke test failed $LASTEXITCODE"}
+          New-Item -ItemType Directory -Force artifacts/final|Out-Null
+          Copy-Item $exe artifacts/final/Spankyho_Optimizer_V12_2_6_Setup.exe
+          Get-FileHash artifacts/final/Spankyho_Optimizer_V12_2_6_Setup.exe -Algorithm SHA256|Format-List|Out-File artifacts/final/SHA256.txt
+          Get-Item artifacts/final/Spankyho_Optimizer_V12_2_6_Setup.exe | Format-List Name,Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Spankyho_Optimizer_V12_2_6_Setup
+          path: |
+            artifacts/final/Spankyho_Optimizer_V12_2_6_Setup.exe
+            artifacts/final/SHA256.txt
+          compression-level: 0
+          retention-days: 1
