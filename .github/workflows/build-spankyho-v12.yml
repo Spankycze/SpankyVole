@@ -38,6 +38,8 @@ jobs:
             $s = $s.Replace('Windows App SDK 2.4','Windows App SDK 1.8')
             $s = $s.Replace(' FontFamily="Segoe UI Variable Text"','')
             $s = $s.Replace('SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };','SystemBackdrop = new MicaBackdrop();')
+            $s = $s.Replace('SystemBackdrop=new MicaBackdrop{Kind=MicaKind.BaseAlt};','SystemBackdrop=new MicaBackdrop();')
+            $s = $s.Replace('var id=Win32Interop.GetWindowIdFromWindow','var id=Microsoft.UI.Win32Interop.GetWindowIdFromWindow')
             Set-Content $_.FullName $s -NoNewline
           }
 
