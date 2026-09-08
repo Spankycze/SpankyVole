@@ -4,4 +4,8 @@
     <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="Microsoft.CSharp" />
   </ItemGroup>
+  <Target Name="CopyInstallerForWorkflow" AfterTargets="Build" Condition="'$(MSBuildProjectName)' == 'SpankyhoInstaller'">
+    <MakeDir Directories="$(MSBuildProjectDirectory)\bin\Release\net48" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(MSBuildProjectDirectory)\bin\Release\net48\Spankyho_Optimizer_V12_2_3_Compact_Setup.exe" />
+  </Target>
 </Project>
