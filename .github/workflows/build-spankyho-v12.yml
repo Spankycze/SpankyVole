@@ -25,7 +25,7 @@ jobs:
           Expand-Archive source.zip . -Force
           Write-Host "Source archive: $($bytes.Length) bytes"
 
-      - name: Pin stable Windows App SDK 1.8 line
+      - name: Pin stable Windows App SDK 1.8 line and normalize XAML
         shell: pwsh
         run: |
           Get-ChildItem src -Recurse -Filter *.csproj | ForEach-Object {
@@ -36,6 +36,7 @@ jobs:
           Get-ChildItem src -Recurse -Include *.xaml,*.cs | ForEach-Object {
             $s = Get-Content $_.FullName -Raw
             $s = $s.Replace('Windows App SDK 2.4','Windows App SDK 1.8')
+            $s = $s.Replace(' FontFamily="Segoe UI Variable Text"','')
             Set-Content $_.FullName $s -NoNewline
           }
 
@@ -72,6 +73,7 @@ jobs:
         run: |
           dotnet restore src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -p:Platform=x64
           dotnet publish src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishReadyToRun=true -o artifacts/app
+          if (!(Test-Path artifacts/app)) { throw "Main app publish failed" }
           Compress-Archive -Path artifacts/app/* -DestinationPath artifacts/payload.zip -CompressionLevel Optimal -Force
 
       - name: Build modern WinUI setup
@@ -79,6 +81,7 @@ jobs:
         run: |
           dotnet restore src/SpankyhoOptimizer.Setup/SpankyhoOptimizer.Setup.csproj -p:Platform=x64
           dotnet publish src/SpankyhoOptimizer.Setup/SpankyhoOptimizer.Setup.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishReadyToRun=true -o artifacts/setup
+          if (!(Test-Path artifacts/setup)) { throw "Setup publish failed" }
           Copy-Item artifacts/payload.zip artifacts/setup/payload.zip
           Compress-Archive -Path artifacts/setup/* -DestinationPath src/SpankyhoOptimizer.Bootstrap/Resources/setup.zip -CompressionLevel Optimal -Force
 
