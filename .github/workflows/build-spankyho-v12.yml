@@ -1,4 +1,4 @@
-name: Build Spankyho Optimizer V12.2 WinUI
+name: Build Spankyho Optimizer V12.2.1 Compact WinUI
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Materialize V12.2 source
+      - name: Materialize source
         shell: pwsh
         run: |
           $parts = Get-ChildItem buildsrc/chunk*.txt | Sort-Object Name
@@ -23,25 +23,176 @@ jobs:
           $bytes = [Convert]::FromBase64String($b64)
           [IO.File]::WriteAllBytes('source.zip', $bytes)
           Expand-Archive source.zip . -Force
-          Write-Host "Source archive: $($bytes.Length) bytes"
 
-      - name: Pin stable Windows App SDK 1.8 line and normalize source
+      - name: Normalize WinUI projects for compact framework dependent publish
         shell: pwsh
         run: |
           Get-ChildItem src -Recurse -Filter *.csproj | ForEach-Object {
             $s = Get-Content $_.FullName -Raw
-            $s = $s.Replace('Version="2.4.0"','Version="1.8.*"')
+            $s = $s.Replace('Version="2.4.0"','Version="1.8.260804001"')
+            $s = $s.Replace('<WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>','<WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>')
+            $s = $s.Replace('<PublishReadyToRun>true</PublishReadyToRun>','<PublishReadyToRun>false</PublishReadyToRun>')
             Set-Content $_.FullName $s -NoNewline
           }
           Get-ChildItem src -Recurse -Include *.xaml,*.cs | ForEach-Object {
             $s = Get-Content $_.FullName -Raw
-            $s = $s.Replace('Windows App SDK 2.4','Windows App SDK 1.8')
+            $s = $s.Replace('Windows App SDK 2.4','Windows App SDK 1.8.11')
             $s = $s.Replace(' FontFamily="Segoe UI Variable Text"','')
             $s = $s.Replace('SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };','SystemBackdrop = new MicaBackdrop();')
             $s = $s.Replace('SystemBackdrop=new MicaBackdrop{Kind=MicaKind.BaseAlt};','SystemBackdrop=new MicaBackdrop();')
             $s = $s.Replace('var id=Win32Interop.GetWindowIdFromWindow','var id=Microsoft.UI.Win32Interop.GetWindowIdFromWindow')
             Set-Content $_.FullName $s -NoNewline
           }
+
+      - name: Replace bootstrap with reliable persistent launcher
+        shell: pwsh
+        run: |
+          @'
+          using System.Diagnostics;
+          using System.IO.Compression;
+          using System.Reflection;
+          using System.Runtime.InteropServices;
+
+          internal static class Program
+          {
+              [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+              private static extern int MessageBoxW(nint hWnd, string text, string caption, uint type);
+
+              private static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SpankyhoOptimizer");
+              private static readonly string LogPath = Path.Combine(Root, "setup-bootstrap.log");
+
+              [STAThread]
+              private static int Main(string[] args)
+              {
+                  try
+                  {
+                      Directory.CreateDirectory(Root);
+                      Log("Bootstrap start");
+                      EnsurePrerequisites();
+
+                      var setupDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SpankyhoOptimizer", "Installer", "12.2.1");
+                      try { if (Directory.Exists(setupDir)) Directory.Delete(setupDir, true); } catch { }
+                      Directory.CreateDirectory(setupDir);
+
+                      using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("setup.zip") ?? throw new InvalidOperationException("setup.zip resource missing"))
+                      using (var z = new ZipArchive(s, ZipArchiveMode.Read))
+                          z.ExtractToDirectory(setupDir, true);
+
+                      var setupExe = Path.Combine(setupDir, "SpankyhoOptimizer.Setup.exe");
+                      if (!File.Exists(setupExe)) throw new FileNotFoundException("Setup executable missing", setupExe);
+
+                      if (args.Length > 0 && args[0].Equals("--extract-only", StringComparison.OrdinalIgnoreCase))
+                          return 0;
+
+                      Log("Launching WinUI setup: " + setupExe);
+                      var p = Process.Start(new ProcessStartInfo(setupExe)
+                      {
+                          UseShellExecute = true,
+                          WorkingDirectory = setupDir,
+                          Verb = "runas"
+                      });
+                      if (p is null) throw new InvalidOperationException("Setup process could not be started");
+
+                      // Intentionally do not wait and do not delete setupDir here.
+                      // UAC/ShellExecute can detach from the original process; deleting the files here caused the old setup to disappear before WinUI initialized.
+                      Log("Setup launched, pid=" + p.Id);
+                      return 0;
+                  }
+                  catch (Exception ex)
+                  {
+                      try { Log("FATAL: " + ex); } catch { }
+                      MessageBoxW(0, "Instalátor se nepodařilo spustit.\n\n" + ex.Message + "\n\nLog: " + LogPath, "Spankyho Optimizer Setup", 0x10);
+                      return 1;
+                  }
+              }
+
+              private static void EnsurePrerequisites()
+              {
+                  var prereq = Path.Combine(Root, "Prerequisites");
+                  Directory.CreateDirectory(prereq);
+
+                  if (!HasDotNet10())
+                  {
+                      Log("Installing .NET 10 x64 runtime");
+                      RunEmbeddedInstaller("dotnet-runtime.exe", Path.Combine(prereq, "dotnet-runtime.exe"), "/install /quiet /norestart", new[] { 0, 3010 });
+                  }
+                  else Log(".NET 10 runtime already present");
+
+                  // The Windows App Runtime installer is idempotent and quickly exits when the required runtime is already current.
+                  Log("Ensuring Windows App Runtime 1.8.11 x64");
+                  RunEmbeddedInstaller("windowsappruntime.exe", Path.Combine(prereq, "windowsappruntime.exe"), "--quiet", new[] { 0 });
+              }
+
+              private static bool HasDotNet10()
+              {
+                  try
+                  {
+                      var baseDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "shared", "Microsoft.NETCore.App");
+                      if (!Directory.Exists(baseDir)) return false;
+                      return Directory.EnumerateDirectories(baseDir).Select(Path.GetFileName).Any(v => v is not null && v.StartsWith("10.", StringComparison.Ordinal));
+                  }
+                  catch { return false; }
+              }
+
+              private static void RunEmbeddedInstaller(string resourceName, string target, string arguments, int[] okCodes)
+              {
+                  using (var input = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName) ?? throw new InvalidOperationException(resourceName + " resource missing"))
+                  using (var output = File.Create(target)) input.CopyTo(output);
+
+                  var p = Process.Start(new ProcessStartInfo(target)
+                  {
+                      UseShellExecute = false,
+                      CreateNoWindow = true,
+                      WorkingDirectory = Path.GetDirectoryName(target)!,
+                      Arguments = arguments
+                  }) ?? throw new InvalidOperationException("Could not start " + resourceName);
+                  p.WaitForExit();
+                  var code = p.ExitCode;
+                  p.Dispose();
+                  if (!okCodes.Contains(code)) throw new InvalidOperationException(resourceName + " failed with exit code " + code);
+                  try { File.Delete(target); } catch { }
+              }
+
+              private static void Log(string text)
+              {
+                  File.AppendAllText(LogPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {text}{Environment.NewLine}");
+              }
+          }
+          '@ | Set-Content src/SpankyhoOptimizer.Bootstrap/Program.cs -NoNewline
+
+          @'
+          <?xml version="1.0" encoding="utf-8"?>
+          <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+            <assemblyIdentity version="12.2.1.0" name="SpankyhoOptimizer.Bootstrap"/>
+            <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+              <security><requestedPrivileges><requestedExecutionLevel level="requireAdministrator" uiAccess="false" /></requestedPrivileges></security>
+            </trustInfo>
+          </assembly>
+          '@ | Set-Content src/SpankyhoOptimizer.Bootstrap/app.manifest -NoNewline
+
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>WinExe</OutputType>
+              <TargetFramework>net10.0-windows</TargetFramework>
+              <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+              <PublishAot>true</PublishAot>
+              <SelfContained>true</SelfContained>
+              <InvariantGlobalization>true</InvariantGlobalization>
+              <AssemblyName>Spankyho_Optimizer_V12_2_1_Compact_Setup</AssemblyName>
+              <ApplicationIcon>App.ico</ApplicationIcon>
+              <ApplicationManifest>app.manifest</ApplicationManifest>
+              <DebugType>none</DebugType>
+              <DebugSymbols>false</DebugSymbols>
+              <StripSymbols>true</StripSymbols>
+            </PropertyGroup>
+            <ItemGroup>
+              <EmbeddedResource Include="Resources\setup.zip" LogicalName="setup.zip" />
+              <EmbeddedResource Include="Resources\dotnet-runtime.exe" LogicalName="dotnet-runtime.exe" />
+              <EmbeddedResource Include="Resources\windowsappruntime.exe" LogicalName="windowsappruntime.exe" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content src/SpankyhoOptimizer.Bootstrap/SpankyhoOptimizer.Bootstrap.csproj -NoNewline
 
       - name: Generate application icon
         shell: pwsh
@@ -55,51 +206,60 @@ jobs:
           $g.FillEllipse($brush,8,8,240,240)
           $font = [System.Drawing.Font]::new('Segoe UI',132,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel)
           $white = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
-          $sf = [System.Drawing.StringFormat]::new()
-          $sf.Alignment = [System.Drawing.StringAlignment]::Center
-          $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
+          $sf = [System.Drawing.StringFormat]::new(); $sf.Alignment = [System.Drawing.StringAlignment]::Center; $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
           $g.DrawString('S',$font,$white,[System.Drawing.RectangleF]::new(0,0,256,248),$sf)
-          $hicon = $bmp.GetHicon()
-          $ico = [System.Drawing.Icon]::FromHandle($hicon)
+          $ico = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
           New-Item -ItemType Directory -Force src/SpankyhoOptimizer/Assets,src/SpankyhoOptimizer.Setup/Assets,src/SpankyhoOptimizer.Bootstrap/Resources | Out-Null
-          foreach($p in @('src/SpankyhoOptimizer/Assets/App.ico','src/SpankyhoOptimizer.Setup/Assets/App.ico','src/SpankyhoOptimizer.Bootstrap/App.ico')) {
-            $fs=[IO.File]::Create($p); $ico.Save($fs); $fs.Dispose()
-          }
+          foreach($p in @('src/SpankyhoOptimizer/Assets/App.ico','src/SpankyhoOptimizer.Setup/Assets/App.ico','src/SpankyhoOptimizer.Bootstrap/App.ico')) { $fs=[IO.File]::Create($p); $ico.Save($fs); $fs.Dispose() }
           $ico.Dispose(); $font.Dispose(); $white.Dispose(); $brush.Dispose(); $sf.Dispose(); $g.Dispose(); $bmp.Dispose()
 
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
-      - name: Build main WinUI app
+      - name: Download compact official prerequisites once
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src/SpankyhoOptimizer.Bootstrap/Resources | Out-Null
+          Invoke-WebRequest 'https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.10/dotnet-runtime-10.0.10-win-x64.exe' -OutFile 'src/SpankyhoOptimizer.Bootstrap/Resources/dotnet-runtime.exe'
+          Invoke-WebRequest 'https://aka.ms/windowsappsdk/1.8/1.8.260804001/windowsappruntimeinstall-x64.exe' -OutFile 'src/SpankyhoOptimizer.Bootstrap/Resources/windowsappruntime.exe'
+          Get-Item src/SpankyhoOptimizer.Bootstrap/Resources/*.exe | Select-Object Name,Length | Format-Table
+
+      - name: Build compact main WinUI app
         shell: pwsh
         run: |
           dotnet restore src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -p:Platform=x64
-          dotnet publish src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishReadyToRun=true -o artifacts/app
-          if (!(Test-Path artifacts/app)) { throw "Main app publish failed" }
+          dotnet publish src/SpankyhoOptimizer/SpankyhoOptimizer.csproj -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:PublishReadyToRun=false -o artifacts/app
+          if (!(Test-Path artifacts/app/SpankyhoOptimizer.exe)) { throw "Main app publish failed" }
           Compress-Archive -Path artifacts/app/* -DestinationPath artifacts/payload.zip -CompressionLevel Optimal -Force
+          Get-ChildItem artifacts/app -File | Measure-Object Length -Sum | ForEach-Object { Write-Host "Main app publish bytes: $($_.Sum)" }
 
-      - name: Build modern WinUI setup
+      - name: Build compact modern WinUI setup
         shell: pwsh
         run: |
           dotnet restore src/SpankyhoOptimizer.Setup/SpankyhoOptimizer.Setup.csproj -p:Platform=x64
-          dotnet publish src/SpankyhoOptimizer.Setup/SpankyhoOptimizer.Setup.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsAppSDKSelfContained=true -p:PublishReadyToRun=true -o artifacts/setup
-          if (!(Test-Path artifacts/setup)) { throw "Setup publish failed" }
+          dotnet publish src/SpankyhoOptimizer.Setup/SpankyhoOptimizer.Setup.csproj -c Release -r win-x64 --self-contained false -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:PublishReadyToRun=false -o artifacts/setup
+          if (!(Test-Path artifacts/setup/SpankyhoOptimizer.Setup.exe)) { throw "Setup publish failed" }
           Copy-Item artifacts/payload.zip artifacts/setup/payload.zip
           Compress-Archive -Path artifacts/setup/* -DestinationPath src/SpankyhoOptimizer.Bootstrap/Resources/setup.zip -CompressionLevel Optimal -Force
+          Write-Host "Setup bundle bytes: $((Get-Item src/SpankyhoOptimizer.Bootstrap/Resources/setup.zip).Length)"
 
-      - name: Build single EXE bootstrap
+      - name: Build reliable single EXE installer
         shell: pwsh
         run: |
           dotnet publish src/SpankyhoOptimizer.Bootstrap/SpankyhoOptimizer.Bootstrap.csproj -c Release -r win-x64 -p:PublishAot=true -o artifacts/final
-          $exe = 'artifacts/final/Spankyho_Optimizer_V12_2_WinUI_Setup.exe'
+          $exe = 'artifacts/final/Spankyho_Optimizer_V12_2_1_Compact_Setup.exe'
           if (!(Test-Path $exe)) { throw "Final setup EXE missing" }
-          Get-FileHash $exe -Algorithm SHA256 | Format-List | Out-File artifacts/final/SHA256.txt
+          $size = (Get-Item $exe).Length
+          Write-Host "FINAL EXE BYTES: $size"
+          Get-FileHash $exe -Algorithm SHA256 | Format-List | Tee-Object -FilePath artifacts/final/SHA256.txt
+          & $exe --extract-only
+          if ($LASTEXITCODE -ne 0) { throw "Bootstrap extraction smoke test failed: $LASTEXITCODE" }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Spankyho_Optimizer_V12_2_WinUI_Setup
+          name: Spankyho_Optimizer_V12_2_1_Compact_Setup
           path: |
-            artifacts/final/Spankyho_Optimizer_V12_2_WinUI_Setup.exe
+            artifacts/final/Spankyho_Optimizer_V12_2_1_Compact_Setup.exe
             artifacts/final/SHA256.txt
           compression-level: 0
