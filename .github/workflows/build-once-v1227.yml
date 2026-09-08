@@ -23,16 +23,13 @@ jobs:
           [IO.File]::WriteAllBytes('source.zip',[Convert]::FromBase64String($b64))
           Expand-Archive source.zip . -Force
 
-      - name: Replace fragile MainWindow XAML with minimal host
+      - name: Remove MainWindow XAML completely
         shell: pwsh
         run: |
-          @'
-          <Window
-              x:Class="SpankyhoOptimizer.MainWindow"
-              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-          </Window>
-          '@ | Set-Content src/SpankyhoOptimizer/MainWindow.xaml -Encoding utf8 -NoNewline
+          if(Test-Path src/SpankyhoOptimizer/MainWindow.xaml){
+            Remove-Item src/SpankyhoOptimizer/MainWindow.xaml -Force
+          }
+          Write-Host "MainWindow is now code-only; no runtime XAML load."
 
       - name: Add code-built WinUI shell
         shell: pwsh
@@ -298,7 +295,7 @@ jobs:
         run: |
           $mc='src/SpankyhoOptimizer/MainWindow.xaml.cs'
           $c=Get-Content $mc -Raw
-          $c=$c.Replace("        InitializeComponent();`r`n        ExtendsContentIntoTitleBar = true;","        InitializeComponent();`r`n        BuildShell();`r`n        ExtendsContentIntoTitleBar = true;")
+          $c=$c.Replace('        InitializeComponent();','        BuildShell();')
           $c=$c.Replace('        SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };','        try { SystemBackdrop = new MicaBackdrop(); } catch (Exception ex) { LogService.Error("Backdrop setup failed", ex); }')
           $c=$c.Replace('        ConfigureWindow();','        try { ConfigureWindow(); } catch (Exception ex) { LogService.Error("Window configuration failed", ex); }')
           Set-Content $mc $c -Encoding utf8 -NoNewline
@@ -311,12 +308,11 @@ jobs:
           $s=$s.Replace('<Version>12.2.0</Version>','<Version>12.2.7</Version>')
           Set-Content $p $s -Encoding utf8 -NoNewline
 
-      - name: Validate XAML files before build
+      - name: Validate remaining App XAML before build
         shell: pwsh
         run: |
-          [xml](Get-Content src/SpankyhoOptimizer/MainWindow.xaml -Raw) | Out-Null
           [xml](Get-Content src/SpankyhoOptimizer/App.xaml -Raw) | Out-Null
-          Write-Host "XAML XML validation passed."
+          Write-Host "App.xaml XML validation passed."
 
       - name: Generate app icon
         shell: pwsh
