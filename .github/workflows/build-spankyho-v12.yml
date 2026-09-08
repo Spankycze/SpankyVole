@@ -43,25 +43,25 @@ jobs:
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.Drawing
-          $bmp = New-Object System.Drawing.Bitmap 256,256
+          $bmp = [System.Drawing.Bitmap]::new(256,256)
           $g = [System.Drawing.Graphics]::FromImage($bmp)
           $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
           $g.Clear([System.Drawing.Color]::Transparent)
-          $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255,91,91,214))
+          $brush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255,91,91,214))
           $g.FillEllipse($brush,8,8,240,240)
-          $font = New-Object System.Drawing.Font 'Segoe UI',132,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel
-          $white = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
-          $sf = New-Object System.Drawing.StringFormat
+          $font = [System.Drawing.Font]::new('Segoe UI',132,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel)
+          $white = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
+          $sf = [System.Drawing.StringFormat]::new()
           $sf.Alignment = [System.Drawing.StringAlignment]::Center
           $sf.LineAlignment = [System.Drawing.StringAlignment]::Center
-          $g.DrawString('S',$font,$white,(New-Object System.Drawing.RectangleF(0,0,256,248)),$sf)
+          $g.DrawString('S',$font,$white,[System.Drawing.RectangleF]::new(0,0,256,248),$sf)
           $hicon = $bmp.GetHicon()
           $ico = [System.Drawing.Icon]::FromHandle($hicon)
           New-Item -ItemType Directory -Force src/SpankyhoOptimizer/Assets,src/SpankyhoOptimizer.Setup/Assets,src/SpankyhoOptimizer.Bootstrap/Resources | Out-Null
           foreach($p in @('src/SpankyhoOptimizer/Assets/App.ico','src/SpankyhoOptimizer.Setup/Assets/App.ico','src/SpankyhoOptimizer.Bootstrap/App.ico')) {
             $fs=[IO.File]::Create($p); $ico.Save($fs); $fs.Dispose()
           }
-          $ico.Dispose(); $g.Dispose(); $bmp.Dispose()
+          $ico.Dispose(); $font.Dispose(); $white.Dispose(); $brush.Dispose(); $sf.Dispose(); $g.Dispose(); $bmp.Dispose()
 
       - uses: actions/setup-dotnet@v5
         with:
