@@ -1,7 +1,7 @@
-name: Build HClimate APK
+name: Build HClimate Modern APK
 on:
   push:
-    branches: [ hclimate-build ]
+    branches: [ hclimate-modern-apk ]
   workflow_dispatch:
 permissions:
   contents: read
@@ -11,8 +11,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Unpack source
-        run: unzip -o HClimate_SourceBuild_v0_4_0.zip -d .
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -27,5 +25,5 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: HClimate_Home_v0_4_0
+          name: HClimate_Home_v0_5_0_MODERN
           path: app/build/outputs/apk/debug/app-debug.apk
