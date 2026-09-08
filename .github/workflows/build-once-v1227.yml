@@ -318,6 +318,29 @@ jobs:
           [xml](Get-Content src/SpankyhoOptimizer/App.xaml -Raw) | Out-Null
           Write-Host "XAML XML validation passed."
 
+      - name: Generate app icon
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          New-Item -ItemType Directory -Force src/SpankyhoOptimizer/Assets | Out-Null
+          $bmp=[System.Drawing.Bitmap]::new(256,256)
+          $g=[System.Drawing.Graphics]::FromImage($bmp)
+          $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+          $g.Clear([System.Drawing.Color]::Transparent)
+          $b=[System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255,99,102,241))
+          $g.FillEllipse($b,8,8,240,240)
+          $f=[System.Drawing.Font]::new('Segoe UI',132,[System.Drawing.FontStyle]::Bold,[System.Drawing.GraphicsUnit]::Pixel)
+          $w=[System.Drawing.SolidBrush]::new([System.Drawing.Color]::White)
+          $sf=[System.Drawing.StringFormat]::new()
+          $sf.Alignment=[System.Drawing.StringAlignment]::Center
+          $sf.LineAlignment=[System.Drawing.StringAlignment]::Center
+          $g.DrawString('S',$f,$w,[System.Drawing.RectangleF]::new(0,0,256,248),$sf)
+          $ico=[System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+          $fs=[IO.File]::Create('src/SpankyhoOptimizer/Assets/App.ico')
+          $ico.Save($fs)
+          $fs.Dispose()
+          $ico.Dispose();$f.Dispose();$w.Dispose();$b.Dispose();$sf.Dispose();$g.Dispose();$bmp.Dispose()
+
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 10.0.x
